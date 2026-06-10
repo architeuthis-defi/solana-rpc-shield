@@ -18,6 +18,7 @@ import type {
   RpcTransport,
 } from '../types/index.js';
 import { classifyError, EndpointHealth, isEndpointFault } from './health.js';
+import { SlotMonitor, type SlotMonitorOptions } from './slot-monitor.js';
 
 function normalizeEndpoint(e: string | EndpointConfig): EndpointConfig {
   return typeof e === 'string' ? { url: e } : e;
@@ -55,6 +56,10 @@ export interface ResilientTransport {
   <TResponse>(request: RpcRequest): Promise<TResponse>;
   /** Live per-endpoint health, for the CLI / OpenTelemetry exporter. */
   getHealth(): HealthSnapshot[];
+  /** Begin background slot-lag probing. Idempotent. Caller must stop on teardown. */
+  startHealthMonitor(options?: SlotMonitorOptions): void;
+  /** Stop background probing and release the timer. */
+  stopHealthMonitor(): void;
 }
 
 export function createResilientTransport(config: ResilientTransportConfig): ResilientTransport {
@@ -118,7 +123,22 @@ export function createResilientTransport(config: ResilientTransportConfig): Resi
     });
   };
 
+  const slotTargets = pool.map((p) => ({
+    url: p.cfg.url,
+    transport: p.transport,
+    recordSlot: (own: number, freshest: number) => p.health.recordSlot(own, freshest),
+  }));
+  let slotMonitor = new SlotMonitor(slotTargets);
+
   return Object.assign(transport, {
     getHealth: (): HealthSnapshot[] => pool.map((p) => p.health.snapshot()),
+    startHealthMonitor: (options?: SlotMonitorOptions): void => {
+      if (options) {
+        slotMonitor.stop();
+        slotMonitor = new SlotMonitor(slotTargets, options);
+      }
+      slotMonitor.start();
+    },
+    stopHealthMonitor: (): void => slotMonitor.stop(),
   });
 }
