@@ -12,6 +12,22 @@ export {
   type SlotMonitorOptions,
 } from './transport/slot-monitor.js';
 export {
+  PriorityFeeEstimator,
+  computePriorityFee,
+  type PrioritizationFee,
+  type PriorityFeeConfig,
+} from './transaction/priority-fee.js';
+export {
+  TransactionManager,
+  TransactionFailedError,
+  type Commitment,
+  type LatestBlockhash,
+  type JitoConfig,
+  type TransactionManagerOptions,
+  type SendAndConfirmOptions,
+  type ConfirmResult,
+} from './transaction/transaction-manager.js';
+export {
   ErrorClass,
   type CircuitState,
   type EndpointConfig,
