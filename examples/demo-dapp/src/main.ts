@@ -57,7 +57,11 @@ const log = (line: string): void => {
 const transport = createResilientTransport({
   endpoints: [
     'https://api.devnet.solana.com',
-    'http://127.0.0.1:9', // intentionally dead — failover stays visible in the log
+    // Intentionally dead, with a strong routing preference (the simulate-drop
+    // trick): the first request demonstrably hits the failure, the node eats
+    // the fault and scores to zero — otherwise "no data yet" leaves it at a
+    // misleading perfect 1.00 until the weighted draw happens to pick it.
+    { url: 'http://127.0.0.1:9', weight: 1_000 },
   ],
   requestTimeoutMs: 8_000,
   transportFactory: ({ url }) => createDefaultRpcTransport({ url }),
