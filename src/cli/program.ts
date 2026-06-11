@@ -240,7 +240,11 @@ export function buildProgram(options?: BuildProgramOptions): Command {
         let served = '';
         let faults: string[] = [];
         const transport = createResilientTransport({
-          endpoints,
+          // The victim gets a strong routing preference: while it is healthy
+          // (or half-open) every request demonstrably hits the failure first,
+          // so the failover → circuit-open → recovery story is deterministic
+          // instead of depending on the weighted draw.
+          endpoints: endpoints.map((url) => (url === opts.drop ? { url, weight: 1_000 } : url)),
           transportFactory,
           requestTimeoutMs: 4_000,
           onEvent: (event: TransportEvent) => {
