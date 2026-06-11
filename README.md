@@ -269,6 +269,7 @@ npm ci
 npm test                 # 157 tests: unit + real-server e2e + cross-node consistency + fuzz
 npm run test:cov         # 98.2% lines / 92.6% branches, thresholds enforced
 npm run sim:landing      # the landing-rate A/B table above, reproduced deterministically
+npx tsx examples/resilient-reads.ts   # the quickstart live: reads through a pool with a dead node
 npm run cli -- health -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com
 npm run cli -- simulate-drop -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com \
   -d https://api.mainnet-beta.solana.com --after 2 --duration 4 -n 12 -i 500
