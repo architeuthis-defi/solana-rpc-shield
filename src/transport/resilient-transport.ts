@@ -25,8 +25,12 @@ function normalizeEndpoint(e: string | EndpointConfig): EndpointConfig {
   return typeof e === 'string' ? { url: e } : e;
 }
 
-/** Default transport: a v2-shaped JSON-RPC POST over fetch (no kit-API coupling). */
-function defaultTransportFactory(endpoint: EndpointConfig): RpcTransport {
+/**
+ * Default transport: a v2-shaped JSON-RPC POST over fetch (no kit-API coupling).
+ * Exported so callers (and the CLI's drop simulator) can wrap a real endpoint
+ * transport inside a custom `transportFactory`.
+ */
+export function createFetchTransport(endpoint: EndpointConfig): RpcTransport {
   const headers = { 'content-type': 'application/json', ...(endpoint.headers ?? {}) };
   return async <T>(request: RpcRequest): Promise<T> => {
     const res = await fetch(endpoint.url, {
@@ -68,7 +72,7 @@ export function createResilientTransport(config: ResilientTransportConfig): Resi
   if (endpoints.length === 0) {
     throw new Error('createResilientTransport: at least one endpoint is required');
   }
-  const factory = config.transportFactory ?? defaultTransportFactory;
+  const factory = config.transportFactory ?? createFetchTransport;
   const timeoutMs = config.requestTimeoutMs ?? 10_000;
   const maxAttempts = config.maxAttempts ?? endpoints.length;
   const onEvent = config.onEvent;

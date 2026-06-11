@@ -4,7 +4,11 @@
  * @packageDocumentation
  */
 
-export { createResilientTransport, type ResilientTransport } from './transport/resilient-transport.js';
+export {
+  createResilientTransport,
+  createFetchTransport,
+  type ResilientTransport,
+} from './transport/resilient-transport.js';
 export { EndpointHealth, classifyError, isEndpointFault } from './transport/health.js';
 export {
   SlotMonitor,

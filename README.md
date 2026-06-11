@@ -99,9 +99,27 @@ const signer = fromLegacyAdapter(adapter, { deserialize: VersionedTransaction.de
 ## CLI
 
 ```
-rpc-shield health   --endpoints <a,b,c>     # live per-node scoreboard
-rpc-shield bench    --endpoints <a,b,c>     # latency / throughput compare
-rpc-shield simulate-drop --endpoint <a>     # inject failure, observe failover
+rpc-shield health   -e <a,b,c>               # one-shot per-node health scoreboard
+rpc-shield watch    -e <a,b,c> [-i 2000]     # live-refreshing scoreboard (real-time monitor)
+rpc-shield bench    -e <a,b,c> [-n 30 -c 4]  # raw endpoints vs. shield composite: p50/p95/p99, errors, rps
+rpc-shield tx <sig> -e <a,b,c>               # signature status through the resilient pool
+rpc-shield simulate-drop -e <a,b> -d <a> \
+    --after 2 --duration 4 -n 20             # inject a failure window, watch failover + circuit recovery
+```
+
+Endpoints can also come from `RPC_SHIELD_ENDPOINTS`. Sample `simulate-drop` output —
+the victim endpoint starts failing, the router classifies the faults, the circuit opens,
+and requests keep landing through the survivors:
+
+```
+#  3 ok via https://api.mainnet-beta.solana.com 29ms
+--- DROP WINDOW OPEN: https://api.mainnet-beta.solana.com now failing ---
+#  5 ok via https://backup-node.example.com 41ms  (failed over past: https://api.ma…ta.solana.com:network)
+...
+final health:
+ENDPOINT                                      CIRCUIT    SCORE  LATENCY  ERR-RATE SLOT-LAG  IN-FLIGHT
+https://api.mainnet-beta.solana.com           OPEN       0.00   52ms     67%      0         0
+https://backup-node.example.com               CLOSED     0.86   44ms     0%       0         0
 ```
 
 ## Status & build plan (submission 2026-06-16)
@@ -110,7 +128,7 @@ rpc-shield simulate-drop --endpoint <a>     # inject failure, observe failover
 - [x] Failover + circuit-breaker + slot-lag health monitor
 - [x] `TransactionManager` (Jito routing + dynamic fee + retry/confirm)
 - [x] Wallet integration — `WalletPipeline` + Wallet Standard / legacy adapter bridges
-- [ ] OpenTelemetry export + `rpc-shield` CLI
+- [x] OpenTelemetry export (`ShieldTelemetry`) + `rpc-shield` CLI (health/watch/bench/tx/simulate-drop)
 - [ ] Simulation test harness, ≥90% coverage
 - [ ] Docs, runnable examples, polish
 
