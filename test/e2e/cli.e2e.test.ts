@@ -39,8 +39,8 @@ const output = (): string => writes.join('');
 
 describe('rpc-shield health', () => {
   it('prints a per-endpoint scoreboard with real slot lag', async () => {
-    const fresh = await server({ getSlot: () => 500 });
-    const stale = await server({ getSlot: () => 463 });
+    const fresh = await server({ getSlot: () => 500, getGenesisHash: () => 'G1' });
+    const stale = await server({ getSlot: () => 463, getGenesisHash: () => 'G1' });
     await run('health', '-e', `${fresh.url},${stale.url}`, '-r', '2', '--probe-interval', '40', '-t', '500');
 
     const out = output();

@@ -157,8 +157,8 @@ describe('composite transport under injected network failure', () => {
 
 describe('slot monitor against real servers', () => {
   it('records real slot lag from getSlot probes and survives restarts', async () => {
-    const fresh = await server({ getSlot: () => 1_000 });
-    const stale = await server({ getSlot: () => 963 });
+    const fresh = await server({ getSlot: () => 1_000, getGenesisHash: () => 'G1' });
+    const stale = await server({ getSlot: () => 963, getGenesisHash: () => 'G1' });
     const t = createResilientTransport({ endpoints: [fresh.url, stale.url] });
 
     t.startHealthMonitor({ intervalMs: 5_000 }); // immediate first tick

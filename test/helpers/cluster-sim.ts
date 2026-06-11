@@ -88,6 +88,7 @@ export function createCluster(): ClusterSim {
     const knowsAfterMs = view?.knowsBlockhashAfterMs ?? 0;
 
     const server = await startRpcServer({
+      getGenesisHash: () => 'CLUSTER_SIM_GENESIS', // one chain per cluster
       getLatestBlockhash: () => {
         if (!latest) throw new Error('cluster-sim: registerBlockhash first');
         return {

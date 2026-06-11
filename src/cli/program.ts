@@ -53,6 +53,19 @@ function onSigint(handler: () => void): void {
   process.once('SIGTERM', handler);
 }
 
+/** Mixed-chain pools are a silent misconfiguration — say it out loud. */
+function chainMismatchWarning(transport: ResilientTransport): string | null {
+  const groups = transport.getGenesisGroups();
+  if (groups.size <= 1) return null;
+  const lines = [...groups.entries()].map(
+    ([hash, urls]) => `    ${hash.slice(0, 10)}… → ${urls.map((u) => truncateUrl(u, 44)).join(', ')}`,
+  );
+  return (
+    `\n⚠  endpoints span ${groups.size} DIFFERENT chains (genesis mismatch) — ` +
+    `slot-lag is compared within each chain only:\n${lines.join('\n')}\n`
+  );
+}
+
 export interface BuildProgramOptions {
   /** Make commander throw instead of calling process.exit — for in-process tests. */
   readonly exitOverride?: boolean;
@@ -82,6 +95,8 @@ export function buildProgram(options?: BuildProgramOptions): Command {
         await sleep(opts.probeInterval); // let a slot-probe tick land between requests
       }
       transport.stopHealthMonitor();
+      const warning = chainMismatchWarning(transport);
+      if (warning) process.stdout.write(warning);
       process.stdout.write(`${renderHealthTable(transport.getHealth(), { color: isColor() })}\n`);
     });
 
@@ -104,7 +119,8 @@ export function buildProgram(options?: BuildProgramOptions): Command {
       while (running) {
         await probe(transport);
         const table = renderHealthTable(transport.getHealth(), { color: isColor() });
-        process.stdout.write(`\x1b[2J\x1b[H rpc-shield watch — ${new Date().toISOString()}\n\n${table}\n`);
+        const warning = chainMismatchWarning(transport) ?? '';
+        process.stdout.write(`\x1b[2J\x1b[H rpc-shield watch — ${new Date().toISOString()}\n${warning}\n${table}\n`);
         await sleep(opts.interval);
       }
       transport.stopHealthMonitor();
@@ -282,7 +298,8 @@ export function buildProgram(options?: BuildProgramOptions): Command {
           await sleep(opts.interval);
         }
         transport.stopHealthMonitor();
-        process.stdout.write(`\nfinal health:\n${renderHealthTable(transport.getHealth(), { color: isColor() })}\n`);
+        const warning = chainMismatchWarning(transport) ?? '';
+        process.stdout.write(`${warning}\nfinal health:\n${renderHealthTable(transport.getHealth(), { color: isColor() })}\n`);
       },
     );
 

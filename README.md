@@ -180,6 +180,9 @@ The same engine drives the keypair path and the wallet path — one implementati
   paid-primary/free-backup ordering.
 - Caller aborts (unmount, route change) are **not** endpoint faults: no health penalty, no
   failover — three page navigations can't trip your circuit breakers.
+- **Chain-mismatch detection:** the monitor groups endpoints by genesis hash, compares slot lag
+  only within a chain, and the CLI warns when a pool accidentally mixes mainnet with devnet —
+  a real misconfiguration that would otherwise silently poison routing scores.
 
 ## Wallet integration
 
@@ -216,9 +219,16 @@ rpc-shield simulate-drop -e <a,b> -d <a> \
     --after 2 --duration 4 -n 20             # inject a failure window, watch failover + circuit recovery
 ```
 
-Endpoints can also come from `RPC_SHIELD_ENDPOINTS`. `simulate-drop` against real nodes — the
-victim starts failing, faults get classified, the circuit opens, requests keep landing through
-the survivors:
+Endpoints can also come from `RPC_SHIELD_ENDPOINTS`.
+
+`simulate-drop` against **live nodes** — the victim starts failing, faults get classified, the
+circuit opens, requests keep landing through the survivor, the window closes and traffic returns
+(this recording deliberately mixes mainnet + devnet, so the shield's chain-mismatch detection
+fires too):
+
+![simulate-drop against live Solana nodes](docs/assets/simulate-drop.gif)
+
+Sample output:
 
 ```
 #  3 ok via https://api.mainnet-beta.solana.com 29ms
@@ -249,28 +259,7 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
 - **Fan-out submission & local signature derivation:** designed, deliberately deferred —
   [seams documented](docs/design-notes.md).
 
-## Submission requirements → artifacts
-
-| Listing requirement | Delivered as |
-|---|---|
-| web3.js v2.0 compatibility verified with tests | [`kit-matrix.e2e`](test/e2e/kit-matrix.e2e.test.ts): identical matrix over `@solana/web3.js@2` **and** `@solana/kit`, through real failover, bigint fidelity asserted |
-| Wallet adapter integration (≥1 major wallet) | [sign-once bridges](src/wallet/signers.ts) (Wallet Standard: Phantom/Solflare/Backpack + legacy adapter) · runnable [demo dApp](examples/demo-dapp/) |
-| Jito/MEV routing implemented and documented | relay + atomic bundles + live tip accounts · [example](examples/jito-bundle.ts) · verified against docs.jito.wtf |
-| Observability exports working (OTel or Datadog) | [`ShieldTelemetry`](src/observability/otel.ts) + [docs/observability.md](docs/observability.md) (metric reference, collector + Datadog configs) · [live-verified example](examples/otel-console.ts) |
-| Diagnostics CLI functional | 5 commands, e2e-tested in-process, live-verified against mainnet |
-| 90%+ coverage via network drop & latency simulations | **97.9% lines / 91.5% branches / 100% functions**, thresholds enforced in CI; simulations are real HTTP servers (drops, hangs, 5xx, latency) **plus cross-node consistency divergence** |
-| Public GitHub repo | you are here |
-
-## Judging criteria → proof
-
-| Criterion | Weight | Where to look |
-|---|---|---|
-| Correctness | 40% | [lifecycle engine](src/transaction/lifecycle.ts) + [property fuzz: never-double-lands](test/sim/lifecycle.fuzz.test.ts) + [cross-node consistency tests](test/sim/cross-node.test.ts) + [landing-rate A/B](scripts/landing-sim.ts) — 142 tests |
-| Resilience Quality | 25% | health-scored weighted routing, circuit breakers, slot-lag demotion; real socket-destroy / refused / blackhole / latency sims; `simulate-drop` vs live mainnet |
-| Developer Experience | 20% | 30-second quickstart, 5-command CLI, OTel in 3 lines, 4 runnable examples + demo dApp, typed errors with verbatim node diagnostics |
-| Tests & Simulation Quality | 15% | 97.9%/91.5% enforced in CI on node 20+22; unreliable-network AND inconsistent-cluster simulation classes; deterministic landing-rate table |
-
-## Reviewer tour — verify this submission in 10 minutes
+## Verify it yourself — 10 minutes
 
 ```bash
 git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield

@@ -64,23 +64,70 @@ export class SlotMonitor {
     }
   }
 
+  /**
+   * Genesis hash per endpoint URL, resolved lazily on the first tick.
+   * Endpoints accidentally pointed at DIFFERENT chains (mainnet + devnet in
+   * one pool — a real misconfiguration) must never have their slots compared:
+   * cross-chain "lag" is meaningless and silently poisons routing scores.
+   */
+  private readonly genesis = new Map<string, string>();
+
+  /** Endpoint URLs grouped by chain (genesis hash). >1 group = misconfigured pool. */
+  genesisGroups(): ReadonlyMap<string, readonly string[]> {
+    const groups = new Map<string, string[]>();
+    for (const [url, hash] of this.genesis) {
+      const list = groups.get(hash) ?? [];
+      list.push(url);
+      groups.set(hash, list);
+    }
+    return groups;
+  }
+
   /** Run one probe round. Exposed for deterministic testing. */
   async tick(): Promise<void> {
     if (this.ticking) return; // never overlap rounds
     this.ticking = true;
     try {
-      const slots = await Promise.all(this.targets.map((t) => this.probe(t)));
-      let freshest = 0;
+      const slots = await Promise.all(
+        this.targets.map(async (t) => {
+          const genesis = await this.genesisOf(t);
+          if (genesis === null) return null; // chain unknown — never compare its slots
+          const slot = await this.probe(t);
+          return slot === null ? null : { genesis, slot };
+        }),
+      );
+      // Freshest slot PER CHAIN — lag is only meaningful within one genesis.
+      const freshestByChain = new Map<string, number>();
       for (const s of slots) {
-        if (s !== null && s > freshest) freshest = s;
+        if (s && s.slot > (freshestByChain.get(s.genesis) ?? 0)) freshestByChain.set(s.genesis, s.slot);
       }
-      if (freshest === 0) return; // nothing responded; leave lag untouched
+      if (freshestByChain.size === 0) return; // nothing responded; leave lag untouched
       this.targets.forEach((t, i) => {
         const s = slots[i];
-        if (s !== null && s !== undefined) t.recordSlot(s, freshest);
+        if (s) t.recordSlot(s.slot, freshestByChain.get(s.genesis) ?? s.slot);
       });
     } finally {
       this.ticking = false;
+    }
+  }
+
+  private async genesisOf(target: SlotProbeTarget): Promise<string | null> {
+    const cached = this.genesis.get(target.url);
+    if (cached) return cached;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), this.probeTimeoutMs);
+    try {
+      const resp = await target.transport<{ result?: string }>({
+        payload: { jsonrpc: '2.0', id: 'rpc-shield-genesis', method: 'getGenesisHash', params: [] },
+        signal: ctrl.signal,
+      });
+      if (typeof resp.result !== 'string') return null;
+      this.genesis.set(target.url, resp.result);
+      return resp.result;
+    } catch {
+      return null; // unreachable this round — retry next tick
+    } finally {
+      clearTimeout(timer);
     }
   }
 

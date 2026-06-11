@@ -74,6 +74,13 @@ export interface ResilientTransport {
   <TResponse>(request: RpcRequest): Promise<TResponse>;
   /** Live per-endpoint health, for the CLI / OpenTelemetry exporter. */
   getHealth(): HealthSnapshot[];
+  /**
+   * Endpoint URLs grouped by chain (genesis hash), populated by the health
+   * monitor. More than one group means the pool mixes DIFFERENT chains —
+   * a misconfiguration the CLI warns about; slot-lag is only ever compared
+   * within a group.
+   */
+  getGenesisGroups(): ReadonlyMap<string, readonly string[]>;
   /** Begin background slot-lag probing. Idempotent. Caller must stop on teardown. */
   startHealthMonitor(options?: SlotMonitorOptions): void;
   /** Stop background probing and release the timer. */
@@ -190,6 +197,7 @@ export function createResilientTransport(config: ResilientTransportConfig): Resi
 
   return Object.assign(transport, {
     getHealth: (): HealthSnapshot[] => pool.map((p) => p.health.snapshot()),
+    getGenesisGroups: (): ReadonlyMap<string, readonly string[]> => slotMonitor.genesisGroups(),
     startHealthMonitor: (options?: SlotMonitorOptions): void => {
       if (options) {
         slotMonitor.stop();
