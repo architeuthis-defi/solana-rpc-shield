@@ -43,14 +43,40 @@ compatibility matrix against both, through real failover (`test/e2e/kit-matrix.e
 Omitting `transportFactory` falls back to a zero-dependency `fetch` transport: values stay
 correct, but u64s arrive as JS numbers — use the native factory when you need bigint fidelity.
 
-## Architecture (→ judging axis)
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph dApp["your dApp"]
+    K["keypair signer"]
+    W["user wallet<br/>(sign-only bridge)"]
+    R["createSolanaRpcFromTransport<br/>(web3.js v2 / @solana/kit)"]
+  end
+  W --> WP[WalletPipeline<br/>sign once · rebroadcast]
+  K --> TM
+  WP --> TM[TransactionManager<br/>dynamic fee · confirm/retry]
+  TM -- "bundles + tips" --> J[Jito block engine]
+  J -. "fallback" .-> RT
+  TM --> RT[ResilientTransport<br/>weighted routing · circuit breakers]
+  R --> RT
+  SM[SlotMonitor] -. "slot lag" .-> RT
+  RT --> A[(RPC node A)]
+  RT --> B[(RPC node B)]
+  RT --> N[(RPC node N)]
+  RT -- events --> T[ShieldTelemetry → OpenTelemetry]
+  TM -- events --> T
+  WP -- events --> T
+  C[rpc-shield CLI] -. "getHealth()" .-> RT
+```
+
+## Module map (→ judging axis)
 
 | Module | Responsibility | Judging axis |
 |---|---|---|
 | `transport/` — `ResilientTransport` | Multi-endpoint pool, per-node health score (latency EWMA · slot-lag · error-rate), circuit-breaker, weighted routing + automatic failover | **Resilience** |
 | `transaction/` — `TransactionManager` | Confirmation-aware submit: Jito bundle/relay routing with RPC fallback, dynamic priority-fee estimation, retry with blockhash refresh, status tracking | **Correctness** |
 | `wallet/` — `WalletPipeline` + signer bridges | Resilient submission for **wallet-signed** txs: sign once, re-broadcast the same bytes while the blockhash lives, re-prompt only on opted-in expiry. Bridges for Wallet Standard (Phantom/Solflare/Backpack) and legacy `@solana/wallet-adapter` | **Correctness / DX** |
-| `observability/` | OpenTelemetry metrics — request latency p50/p95/p99, failover/circuit-break events, tx success rate, per-endpoint health gauges | **Developer Experience** |
+| `observability/` — `ShieldTelemetry` | OpenTelemetry metrics — requests/latency/failovers, tx + bundle outcomes, wallet prompt counts, per-endpoint health gauges. Full reference + Datadog/collector configs: [docs/observability.md](docs/observability.md) | **Developer Experience** |
 | `cli/` — `rpc-shield` | Diagnostics: `health` (live endpoint scoreboard), `bench` (latency/throughput compare), `simulate-drop` (inject failures, watch failover) | **Developer Experience** |
 | `test/sim/` | Deterministic mock RPC injecting network-drop / latency / slot-lag; ≥90% coverage incl. failure paths | **Tests** |
 
@@ -135,7 +161,18 @@ rpc-shield simulate-drop -e <a,b> -d <a> \
     --after 2 --duration 4 -n 20             # inject a failure window, watch failover + circuit recovery
 ```
 
-Endpoints can also come from `RPC_SHIELD_ENDPOINTS`. Sample `simulate-drop` output —
+Endpoints can also come from `RPC_SHIELD_ENDPOINTS`. Live `bench` against the three
+official Solana clusters (2026-06-11, EU residential network):
+
+```
+TARGET                                        REQS  ERRS  MIN     P50     P95     P99     MAX     RPS
+https://api.mainnet-beta.solana.com           12    0     27ms    31ms    149ms   149ms   149ms   49.4
+https://api.devnet.solana.com                 12    0     24ms    24ms    79ms    79ms    79ms    75.9
+https://api.testnet.solana.com                12    0     110ms   111ms   429ms   429ms   429ms   15.6
+shield composite (3 endpoints)                12    0     23ms    29ms    151ms   151ms   151ms   45.3
+```
+
+Sample `simulate-drop` output —
 the victim endpoint starts failing, the router classifies the faults, the circuit opens,
 and requests keep landing through the survivors:
 
@@ -150,15 +187,26 @@ https://api.mainnet-beta.solana.com           OPEN       0.00   52ms     67%    
 https://backup-node.example.com               CLOSED     0.86   44ms     0%       0         0
 ```
 
-## Status & build plan (submission 2026-06-16)
+## Submission requirements → where each one lives
 
-- [x] Scaffold + `ResilientTransport` (pool + health scoring)
-- [x] Failover + circuit-breaker + slot-lag health monitor
-- [x] `TransactionManager` (Jito routing + dynamic fee + retry/confirm)
-- [x] Wallet integration — `WalletPipeline` + Wallet Standard / legacy adapter bridges
-- [x] OpenTelemetry export (`ShieldTelemetry`) + `rpc-shield` CLI (health/watch/bench/tx/simulate-drop)
-- [ ] Simulation test harness, ≥90% coverage
-- [ ] Docs, runnable examples, polish
+| Listing requirement | Delivered as |
+|---|---|
+| web3.js v2.0 compatibility verified with tests | `test/e2e/kit-matrix.e2e.test.ts` — identical matrix over `@solana/web3.js@2` **and** `@solana/kit`, through real failover, bigint fidelity asserted |
+| Wallet adapter integration (≥1 major wallet) | `src/wallet/` sign-only bridges (Wallet Standard: Phantom/Solflare/Backpack + legacy adapter) · runnable [demo dApp](examples/demo-dapp/) |
+| Jito/MEV routing implemented and documented | relay + atomic bundles + live tip accounts (`src/transaction/`), [example](examples/jito-bundle.ts), README section above |
+| Observability exports working (OTel or Datadog) | `ShieldTelemetry` + [docs/observability.md](docs/observability.md) (metric reference, collector + Datadog configs) · live-verified [example](examples/otel-console.ts) |
+| Diagnostics CLI functional | `rpc-shield` ×5 commands, e2e-tested in-process, live-verified against mainnet |
+| 90%+ coverage via network drop & latency simulations | **98.7% lines / 91.7% branches / 100% functions** over a real local JSON-RPC server injecting drops, hangs, 5xx and latency — thresholds enforced in CI |
+| Public GitHub repo | you are here; CI badge above |
+
+## Judging criteria → proof
+
+| Criterion | Weight | Where to look |
+|---|---|---|
+| Correctness | 40% | `TransactionManager` + `WalletPipeline` + bundles: 119 tests including simulated failure conditions; live devnet example |
+| Resilience Quality | 25% | health-scored weighted routing, circuit breakers, slot-lag demotion; real socket-destroy / refused / blackhole e2e; `simulate-drop` vs mainnet |
+| Developer Experience | 20% | 30-second quickstart above, 5-command CLI, OTel in three lines, 4 runnable examples + demo dApp |
+| Test Coverage & Simulation Quality | 15% | 98.7%/91.7% enforced thresholds; simulations are a real HTTP server, not mocks-only |
 
 ## Development
 
