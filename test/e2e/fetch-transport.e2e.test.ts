@@ -69,7 +69,12 @@ describe('composite transport under injected network failure', () => {
     const deadUrl = dying.url;
     await dying.close(); // true network drop: nothing listens on that port any more
 
-    const t = createResilientTransport({ endpoints: [deadUrl, good.url], requestTimeoutMs: 1_000 });
+    const t = createResilientTransport({
+      // pin the first attempt to the closed port — refusal must be classified, not skipped
+      endpoints: [{ url: deadUrl, weight: 100 }, good.url],
+      routing: 'best',
+      requestTimeoutMs: 1_000,
+    });
     for (let i = 0; i < 3; i++) {
       const out = await t<{ result?: number }>(REQ);
       expect(out.result).toBe(7);

@@ -33,7 +33,9 @@ describe('ResilientTransport failover', () => {
 
   it('penalises the failing endpoint in its health snapshot', async () => {
     const t = createResilientTransport({
-      endpoints: ['https://dead', 'https://live'],
+      // pin the first attempt to the dead node so failures deterministically accrue
+      endpoints: [{ url: 'https://dead', weight: 100 }, 'https://live'],
+      routing: 'best',
       transportFactory: mockFactory({ 'https://dead': 'network', 'https://live': 'ok' }),
     });
     // Drive a few requests so the dead node accrues failures.
