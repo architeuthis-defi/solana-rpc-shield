@@ -1,47 +1,115 @@
 # solana-rpc-shield
 
 [![CI](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/badge/coverage-97.9%25_lines_·_91.5%25_branches-brightgreen)](vitest.config.ts)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 
-**Resilient RPC + transaction-reliability SDK for Solana dApps.** A drop-in layer over `@solana/web3.js` v2 that keeps dApps online when individual RPC nodes degrade, lag, or drop — and lands transactions reliably under congestion.
+**The transaction-landing recipe every Solana guide tells you to build yourself — shipped as a library.**
 
-> Built for the Superteam Ukraine bounty *"Build SDK that improves RPC and transaction reliability for Solana dApps."* Targets the four judging axes directly: **Correctness · Resilience · Developer Experience · Tests.**
+Solana's [official retry guide](https://solana.com/developers/guides/advanced/retry) and Helius's
+["How to Land Transactions"](https://www.helius.dev/blog/how-to-land-transactions-on-solana) agree on
+the recipe: send with `maxRetries: 0`, re-broadcast the *same signed bytes* every ~2s yourself,
+re-sign **only after verified** blockhash expiry, use dynamic priority fees, and route around
+degraded RPC nodes. Both guides document it; both leave the implementation to you —
+[`@solana/kit` ships failover transports only as cookbook examples](https://github.com/anza-xyz/kit).
+`solana-rpc-shield` is that recipe as a typed, tested SDK on the standard web3.js v2 / kit
+transport seam — **provider-agnostic**, where the existing alternatives are vendor-locked or DIY.
 
----
-
-## The problem
-
-Solana dApps that point at a single RPC endpoint inherit that endpoint's worst moment: a stalled slot, a rate-limit, a regional outage, a dropped websocket. Transaction submission compounds it — a stale blockhash, an under-priced fee, or a node that silently drops the send leaves users staring at a spinner. Most teams hand-roll ad-hoc retries that mask the failure mode instead of routing around it.
-
-`solana-rpc-shield` makes resilience the default: requests are scored and routed across a pool of endpoints in real time, and transactions are submitted through a confirmation-aware pipeline with Jito relay routing and dynamic fees.
-
-## Design: ride the v2 transport seam, don't fight it
-
-`@solana/web3.js` v2 exposes a **pluggable RPC transport** — `createSolanaRpcFromTransport(transport)`. That seam is the whole design. The SDK is a *composite transport* that wraps N endpoint transports with health scoring and failover, so it composes cleanly with the standard RPC client instead of replacing it. No fork, no monkey-patching.
+## 30-second quickstart
 
 ```ts
-import { createSolanaRpcFromTransport, createDefaultRpcTransport } from '@solana/web3.js'; // or '@solana/kit'
-import { createResilientTransport } from 'solana-rpc-shield';
+import { createSolanaRpcFromTransport, createDefaultRpcTransport } from '@solana/kit'; // or '@solana/web3.js' v2
+import { createResilientTransport, TransactionManager } from 'solana-rpc-shield';
 
 const transport = createResilientTransport({
   endpoints: [
-    'https://your-primary.rpc',
+    'https://your-primary.rpc',   // any mix of providers — paid, free, self-hosted
     'https://your-secondary.rpc',
-    'https://your-tertiary.rpc',
+    'https://api.mainnet-beta.solana.com',
   ],
-  // Recommended: let the library's own transport keep v2 wire semantics
-  // (bigint-safe u64 parsing); the shield owns routing, health and failover.
+  // Recommended: the library's own transport keeps v2 wire semantics (bigint u64s);
+  // the shield owns routing, health scoring and failover.
   transportFactory: ({ url }) => createDefaultRpcTransport({ url }),
 });
+transport.startHealthMonitor(); // background slot-lag probes — stale nodes get demoted
 
-const rpc = createSolanaRpcFromTransport(transport);
-// use `rpc` exactly like a normal v2 RPC — failover is transparent
+const rpc = createSolanaRpcFromTransport(transport);  // reads: failover is transparent
+const manager = new TransactionManager(transport);    // writes: the landing recipe below
 ```
 
-**Works with both package names.** `@solana/web3.js@2` and `@solana/kit` (its renamed
-continuation) expose the same transport seam — the test suite runs an identical
-compatibility matrix against both, through real failover (`test/e2e/kit-matrix.e2e.test.ts`).
-Omitting `transportFactory` falls back to a zero-dependency `fetch` transport: values stay
-correct, but u64s arrive as JS numbers — use the native factory when you need bigint fidelity.
+Works with **both package names**: `@solana/web3.js@2` and `@solana/kit` run the identical
+compatibility matrix in [`test/e2e/kit-matrix.e2e.test.ts`](test/e2e/kit-matrix.e2e.test.ts) —
+through real failover, bigint fidelity asserted.
+
+## Where this sits
+
+| | **solana-rpc-shield** | DIY on `@solana/kit` | [`helius-sdk`](https://github.com/helius-labs/helius-sdk) | [`gill`](https://github.com/gillsdk/gill) |
+|---|---|---|---|---|
+| Multi-endpoint failover | health-scored + circuit breakers + [slot-lag demotion](src/transport/health.ts) | [cookbook example](https://github.com/anza-xyz/kit) you copy & maintain | managed — **Helius endpoints only** | out of scope (deliberately minimal) |
+| Rebroadcast + verified-expiry re-sign | [built-in, same-bytes](src/transaction/lifecycle.ts) | build yourself | smart transactions, vendor-managed | build yourself |
+| Never-double-lands guarantee | [property-fuzzed invariant](test/sim/lifecycle.fuzz.test.ts) | — | — | — |
+| Wallet sign-once pipeline | [yes](src/wallet/wallet-pipeline.ts) (Wallet Standard + legacy bridge) | build yourself | n/a | no |
+| Jito bundles + live tip accounts | [yes](src/transaction/transaction-manager.ts) | build yourself | via Helius Sender | no |
+| Works with **any** provider mix | yes — bring 2+ URLs | yes | no | yes |
+| OpenTelemetry metrics | [yes](docs/observability.md) | no | no | no |
+
+*If you're all-in on Helius, use `helius-sdk` — it automates this well inside that stack. `gill` is
+an ergonomics layer, not a reliability engine — complementary, not competing. The shield is for
+everyone who wants the documented landing behaviour across any providers, including free public
+endpoints.*
+
+## What the guides say → where the shield implements it
+
+| Canonical guidance | Source | Implemented at |
+|---|---|---|
+| Send with `maxRetries: 0`; own the retry loop client-side | [Solana docs](https://solana.com/developers/guides/advanced/retry) | [`submitViaRpc`](src/transaction/transaction-manager.ts) (`maxRetries: 0`) + [lifecycle engine](src/transaction/lifecycle.ts) |
+| Re-broadcast the **same signed bytes** on a ~2s cadence until expiry | [Helius guide](https://www.helius.dev/blog/how-to-land-transactions-on-solana) | [`runTxLifecycle`](src/transaction/lifecycle.ts) rebroadcast loop · [test](test/sim/transaction-manager.test.ts) |
+| Re-sign only after `lastValidBlockHeight` has verifiably passed | [Solana docs](https://solana.com/developers/guides/advanced/retry) | two all-null full-history sweeps + grace window before any re-sign · [cross-node tests](test/sim/cross-node.test.ts) |
+| Don't trust one-shot confirmation — it has a history of lying | [#23949](https://github.com/solana-labs/solana/issues/23949), [#25955](https://github.com/solana-labs/solana/issues/25955) | status polling over **all** submitted signatures, `searchTransactionHistory` death sweeps |
+| Dynamic priority fees, never fixed | [Helius guide](https://www.helius.dev/blog/how-to-land-transactions-on-solana) | [`PriorityFeeEstimator`](src/transaction/priority-fee.ts) percentile + clamps + [pluggable external source](src/transaction/priority-fee.ts) |
+| Don't `skipPreflight` blindly | [Solana docs](https://solana.com/docs/rpc/http/sendtransaction) | default `false`; rebroadcasts skip (already validated) |
+| Jito: tip inside the transaction, accounts fetched live | [docs.jito.wtf](https://docs.jito.wtf/lowlatencytxnsend/) | [`getTipAccounts`/`submitBundle`](src/transaction/transaction-manager.ts), never a hardcoded list |
+
+## Measured evidence
+
+**Landing-rate A/B** — `npm run sim:landing`, 50 intents × 5 failure scenarios over real local
+HTTP servers sharing one truth ledger. The *naive* client is the tutorial pattern implemented
+fairly: one endpoint, send, poll, and on timeout re-sign a fresh transaction:
+
+| Scenario | Client | Landed | Lost | **Double-lands** | Extra signatures | Median confirm |
+|---|---|---|---|---|---|---|
+| endpoint outage (25% of intents) | naive | 74% | 26% | **0** | 0 | 3ms |
+| | **shield** | **100%** | 0% | **0** | 0 | 8ms |
+| latency spike (50% of intents) | naive | 100% | 0% | **0** | 0 | 361ms |
+| | **shield** | **100%** | 0% | **0** | 0 | 7ms |
+| status-blind node (hot polls lag 450ms) | naive | 100% | 0% | **50** | 100 | — |
+| | **shield** | **100%** | 0% | **0** | 0 | 465ms |
+| rate-limit bursts (30% of intents) | naive | 70% | 30% | **0** | 0 | 2ms |
+| | **shield** | **100%** | 0% | **0** | 0 | 5ms |
+| blackhole (20% of intents) | naive | 80% | 20% | **0** | 0 | 3ms |
+| | **shield** | **100%** | 0% | **0** | 0 | 4ms |
+
+The status-blind row is the headline: the naive pattern **double/triple-landed every single
+intent** (50/50, 100 extra signatures) *while reporting total failure to the user* — who would
+retry, again. That is the funds-loss bug class the lifecycle engine exists to kill. Counts are
+deterministic (failure assignment by intent index); run it yourself. *Simulated network, not
+mainnet — the value is that the table reproduces exactly.*
+
+**Property-based fuzz** — [~500 randomized cluster schedules per CI run](test/sim/lifecycle.fuzz.test.ts)
+(node status lag, height skew, blockhash propagation delay, landing delays, reverts, drops) on a
+virtual clock. Headline invariant: **never double-lands**, plus truthful-confirm,
+resign-only-after-verified-death, truthful-failure, termination.
+
+**Live bench** against the three official clusters (2026-06-11, EU residential network):
+
+```
+TARGET                                        REQS  ERRS  MIN     P50     P95     P99     MAX     RPS
+https://api.mainnet-beta.solana.com           12    0     27ms    31ms    149ms   149ms   149ms   49.4
+https://api.devnet.solana.com                 12    0     24ms    24ms    79ms    79ms    79ms    75.9
+https://api.testnet.solana.com                12    0     110ms   111ms   429ms   429ms   429ms   15.6
+shield composite (3 endpoints)                12    0     23ms    29ms    151ms   151ms   151ms   45.3
+```
 
 ## Architecture
 
@@ -54,7 +122,7 @@ flowchart LR
   end
   W --> WP[WalletPipeline<br/>sign once · rebroadcast]
   K --> TM
-  WP --> TM[TransactionManager<br/>dynamic fee · confirm/retry]
+  WP --> TM[TransactionManager<br/>lifecycle engine · dynamic fee]
   TM -- "bundles + tips" --> J[Jito block engine]
   J -. "fallback" .-> RT
   TM --> RT[ResilientTransport<br/>weighted routing · circuit breakers]
@@ -69,86 +137,73 @@ flowchart LR
   C[rpc-shield CLI] -. "getHealth()" .-> RT
 ```
 
-## Module map (→ judging axis)
-
 | Module | Responsibility | Judging axis |
 |---|---|---|
-| `transport/` — `ResilientTransport` | Multi-endpoint pool, per-node health score (latency EWMA · slot-lag · error-rate), circuit-breaker, weighted routing + automatic failover | **Resilience** |
-| `transaction/` — `TransactionManager` | Confirmation-aware submit: Jito bundle/relay routing with RPC fallback, dynamic priority-fee estimation, retry with blockhash refresh, status tracking | **Correctness** |
-| `wallet/` — `WalletPipeline` + signer bridges | Resilient submission for **wallet-signed** txs: sign once, re-broadcast the same bytes while the blockhash lives, re-prompt only on opted-in expiry. Bridges for Wallet Standard (Phantom/Solflare/Backpack) and legacy `@solana/wallet-adapter` | **Correctness / DX** |
-| `observability/` — `ShieldTelemetry` | OpenTelemetry metrics — requests/latency/failovers, tx + bundle outcomes, wallet prompt counts, per-endpoint health gauges. Full reference + Datadog/collector configs: [docs/observability.md](docs/observability.md) | **Developer Experience** |
-| `cli/` — `rpc-shield` | Diagnostics: `health` (live endpoint scoreboard), `bench` (latency/throughput compare), `simulate-drop` (inject failures, watch failover) | **Developer Experience** |
-| `test/sim/` | Deterministic mock RPC injecting network-drop / latency / slot-lag; ≥90% coverage incl. failure paths | **Tests** |
+| `transaction/` — [lifecycle engine](src/transaction/lifecycle.ts) + `TransactionManager` | The landing recipe: signature-set tracking, same-bytes rebroadcast, verified-death re-sign, bounded `Blockhash not found` retry with verbatim error surfacing, Jito relay/bundles, dynamic fees | **Correctness** |
+| `transport/` — `ResilientTransport` | Multi-endpoint pool, per-node health (latency EWMA · slot-lag · error class), circuit breakers, score-proportional weighted routing | **Resilience** |
+| `wallet/` — `WalletPipeline` + bridges | Wallet-signed txs: sign **once**, rebroadcast same bytes, re-prompt only after verified expiry and only opt-in. Wallet Standard (Phantom/Solflare/Backpack) + legacy adapter | **Correctness / DX** |
+| `observability/` — `ShieldTelemetry` | OpenTelemetry: requests/latency/failovers, tx + bundle outcomes, wallet prompt counts, per-endpoint gauges → [docs/observability.md](docs/observability.md) | **DX** |
+| `cli/` — `rpc-shield` | `health` · `watch` · `bench` · `tx` · `simulate-drop` | **DX** |
+| `test/` | Real-server network sims + cross-node **consistency** sims + property fuzz + landing-rate A/B | **Tests** |
 
-## Health scoring (the core of Resilience)
+## The transaction lifecycle (the core of Correctness)
 
-Each endpoint carries a rolling score; the router prefers the healthiest live node and trips a circuit breaker on sustained failure, re-probing on a backoff.
+One logical send = up to `maxAttempts` blockhash epochs:
 
-- **Latency** — EWMA of round-trip time per request.
-- **Slot lag** — distance of the node's latest slot behind the freshest seen across the pool (a node serving stale state is "up" but wrong).
-- **Error rate** — windowed failure ratio (timeouts, 5xx, rate-limits classified distinctly).
-- **Circuit breaker** — N consecutive failures → endpoint quarantined for a backoff interval, then half-open probe.
+1. **Sign once per epoch**, submit with `maxRetries: 0`; a `Blockhash not found` preflight from a
+   lagging node is retried (bounded), every other node answer surfaces **verbatim** as
+   `RpcSubmitError` (code, message, simulation logs).
+2. **Poll all submitted signatures** every 2s; **re-broadcast the same signed bytes** on the same
+   cadence (leader rotates every ~1.6s). Rebroadcast errors are non-authoritative — the status
+   poll is the truth.
+3. **Expiry is verified, never guessed**: suspected only when block height passes
+   `lastValidBlockHeight` *plus a safety margin* (nodes skew a few blocks apart), then confirmed
+   by **two all-null full-history sweeps** over every signature this call ever submitted,
+   separated by a grace window. A transaction that landed late is *returned*, not double-signed.
+4. **A timeout is terminal** — `TransactionTimedOutError` carries all signatures so you can keep
+   watching; re-signing on a wall-clock guess is how double-sends happen.
+5. `durableNonce` lifetime at the engine level skips expiry semantics entirely
+   ([design notes](docs/design-notes.md)).
 
-Slot-lag is the non-obvious one: a node can answer fast and still serve state seconds behind the cluster. Scoring on lag, not just liveness, is what separates this from a naive round-robin.
+The same engine drives the keypair path and the wallet path — one implementation, one fuzz target.
 
-### Traffic distribution (anti-rate-limit by design)
+## Health scoring & traffic distribution (the core of Resilience)
 
-A router that always picks the single best node concentrates 100% of load on it — and
-*provokes* the rate-limits it is supposed to avoid. The default `routing: 'weighted'`
-draws each request's failover order by **score-proportional sampling without
-replacement**, damped by in-flight load: healthier nodes win more often, but every
-healthy node carries a share, so no endpoint sees your full request rate. Zero-score
-nodes are last resorts, never coin-flip winners. `routing: 'best'` opts back into
-strict score ordering for paid-primary/free-backup setups (combine with per-endpoint
-`weight`).
+- **Latency** — EWMA per request · **Slot lag** — distance behind the freshest node in the pool
+  (a fast node serving stale state is "up" but wrong) · **Error rate** — windowed, with
+  timeouts/5xx/rate-limits classified distinctly · **Circuit breaker** — quarantine with
+  exponential backoff, half-open probes.
+- The default `routing: 'weighted'` draws each request's failover order by **score-proportional
+  sampling without replacement**, damped by in-flight load — every healthy node carries a share,
+  so no endpoint sees your full request rate (always hammering the single best node *provokes*
+  the 429s the shield exists to avoid). `routing: 'best'` + per-endpoint `weight` gives strict
+  paid-primary/free-backup ordering.
+- Caller aborts (unmount, route change) are **not** endpoint faults: no health penalty, no
+  failover — three page navigations can't trip your circuit breakers.
 
-## Transaction reliability (the core of Correctness)
+## Wallet integration
 
-- **Jito relay routing** with RPC fallback — submit via Jito block-engine when configured; fall back to the resilient RPC pool on relay failure. (Never `skipPreflight` blindly; never a fixed fee.)
-- **Jito atomic bundles + tips** — `submitBundle` / `confirmBundle` / `sendBundleAndConfirm`
-  over `/api/v1/bundles` (1–5 txs, all-or-nothing, private until landed = no public-mempool
-  frontrunning surface). Tip accounts are fetched live from the engine's `getTipAccounts`
-  and picked at random to spread write-lock contention — never a hardcoded list that goes
-  stale. The tip transfer (≥ `MIN_JITO_TIP_LAMPORTS`) goes **inside** one of your
-  transactions, so a failed bundle pays no tip. See `examples/jito-bundle.ts`.
-- **Dynamic priority fee** — estimate from recent prioritization fees, clamped to a floor/ceiling.
-- **Retry with blockhash refresh** — re-fetch a fresh blockhash on expiry rather than resubmitting a dead transaction.
-- **Confirmation tracking** — poll signature status to a target commitment with bounded timeout; surface the real revert reason on failure, never an empty catch.
-
-## Wallet integration (the dApp-facing path)
-
-Wallets sign — the shield submits. Calling a wallet's `signAndSendTransaction` hands the
-send to the wallet's single internal RPC: no failover, no fee strategy, no confirmation
-tracking. The `WalletPipeline` instead asks the wallet to **sign only**, then owns the
-submit/confirm lifecycle through the resilient transport.
-
-The retry primitive is wallet-aware: a naive integration that "retries" by rebuilding the
-transaction re-prompts the user with a popup on every attempt. The pipeline signs **once**
-and re-broadcasts the *same signed bytes* while the blockhash is still valid — the status
-poll stays authoritative. A fresh prompt happens only after expiry, and only when the dApp
-opts in with `resignOnExpiry`.
+Wallets sign — the shield submits. A wallet's own `signAndSendTransaction` goes through its single
+internal RPC: no failover, no fee strategy, no rebroadcast. The bridge takes **sign-only** access
+(and refuses wallets that can't), then the pipeline owns the lifecycle:
 
 ```ts
 import { TransactionManager, WalletPipeline, fromWalletStandard } from 'solana-rpc-shield';
 
-// any Wallet Standard wallet — Phantom, Solflare, Backpack…
-const signer = fromWalletStandard(wallet); // sign-only; throws if the wallet can't sign without sending
-
+const signer = fromWalletStandard(wallet); // Phantom, Solflare, Backpack — sign-only
 const pipeline = new WalletPipeline(new TransactionManager(transport), signer);
 
 const result = await pipeline.sendAndConfirm({
   buildTx: (blockhash) => buildMyTransferTx(blockhash), // unsigned serialized tx
-  resignOnExpiry: false, // extra popups are opt-in, never a surprise
+  resignOnExpiry: false, // extra popups are opt-in — and only after VERIFIED expiry
 });
 ```
 
-Legacy `@solana/wallet-adapter` dApps bridge with one extra line (the SDK itself stays
-free of web3.js v1 dependencies):
-
-```ts
-import { VersionedTransaction } from '@solana/web3.js'; // the dApp's existing v1 install
-const signer = fromLegacyAdapter(adapter, { deserialize: VersionedTransaction.deserialize });
-```
+The user is prompted **once**; rebroadcasts reuse the same signed bytes. A transaction that lands
+during death verification is returned without a second prompt. Legacy `@solana/wallet-adapter`
+bridges with one line (`fromLegacyAdapter(adapter, { deserialize: VersionedTransaction.deserialize })`).
+Runnable: [demo dApp](examples/demo-dapp/) — consumes the SDK as a built package, live health
+panel, intentionally dead endpoint in the pool.
 
 ## CLI
 
@@ -161,20 +216,9 @@ rpc-shield simulate-drop -e <a,b> -d <a> \
     --after 2 --duration 4 -n 20             # inject a failure window, watch failover + circuit recovery
 ```
 
-Endpoints can also come from `RPC_SHIELD_ENDPOINTS`. Live `bench` against the three
-official Solana clusters (2026-06-11, EU residential network):
-
-```
-TARGET                                        REQS  ERRS  MIN     P50     P95     P99     MAX     RPS
-https://api.mainnet-beta.solana.com           12    0     27ms    31ms    149ms   149ms   149ms   49.4
-https://api.devnet.solana.com                 12    0     24ms    24ms    79ms    79ms    79ms    75.9
-https://api.testnet.solana.com                12    0     110ms   111ms   429ms   429ms   429ms   15.6
-shield composite (3 endpoints)                12    0     23ms    29ms    151ms   151ms   151ms   45.3
-```
-
-Sample `simulate-drop` output —
-the victim endpoint starts failing, the router classifies the faults, the circuit opens,
-and requests keep landing through the survivors:
+Endpoints can also come from `RPC_SHIELD_ENDPOINTS`. `simulate-drop` against real nodes — the
+victim starts failing, faults get classified, the circuit opens, requests keep landing through
+the survivors:
 
 ```
 #  3 ok via https://api.mainnet-beta.solana.com 29ms
@@ -187,37 +231,61 @@ https://api.mainnet-beta.solana.com           OPEN       0.00   52ms     67%    
 https://backup-node.example.com               CLOSED     0.86   44ms     0%       0         0
 ```
 
-## Submission requirements → where each one lives
+## Scope decisions (deliberate)
+
+Declared limits beat discovered ones — full reasoning in [docs/design-notes.md](docs/design-notes.md):
+
+- **WebSocket subscriptions: out of scope by design.** One-shot WS confirmation has a documented
+  history of lying ([#23949](https://github.com/solana-labs/solana/issues/23949),
+  [#25955](https://github.com/solana-labs/solana/issues/25955)); polling against a health-scored
+  pool is the strictly-more-robust path for a *reliability* library. Layer push UX on top if you
+  want it — confirmation truth stays poll-based.
+- **SWQoS, stated precisely:** a client SDK cannot *create* stake-weighted QoS. Your endpoint
+  list IS the routing policy — point an entry at a staked-connection endpoint or sender service
+  and submissions route through SWQoS that already exists. No overclaim.
+- **Fee estimator limits:** `getRecentPrioritizationFees` reports per-slot **minimums** — a floor
+  heuristic. For latency-critical flows plug a provider percentile API via
+  `priorityFee.source` (result still clamped — an API outage can't bid zero or runaway).
+- **Fan-out submission & local signature derivation:** designed, deliberately deferred —
+  [seams documented](docs/design-notes.md).
+
+## Submission requirements → artifacts
 
 | Listing requirement | Delivered as |
 |---|---|
-| web3.js v2.0 compatibility verified with tests | `test/e2e/kit-matrix.e2e.test.ts` — identical matrix over `@solana/web3.js@2` **and** `@solana/kit`, through real failover, bigint fidelity asserted |
-| Wallet adapter integration (≥1 major wallet) | `src/wallet/` sign-only bridges (Wallet Standard: Phantom/Solflare/Backpack + legacy adapter) · runnable [demo dApp](examples/demo-dapp/) |
-| Jito/MEV routing implemented and documented | relay + atomic bundles + live tip accounts (`src/transaction/`), [example](examples/jito-bundle.ts), README section above |
-| Observability exports working (OTel or Datadog) | `ShieldTelemetry` + [docs/observability.md](docs/observability.md) (metric reference, collector + Datadog configs) · live-verified [example](examples/otel-console.ts) |
-| Diagnostics CLI functional | `rpc-shield` ×5 commands, e2e-tested in-process, live-verified against mainnet |
-| 90%+ coverage via network drop & latency simulations | **98.7% lines / 91.7% branches / 100% functions** over a real local JSON-RPC server injecting drops, hangs, 5xx and latency — thresholds enforced in CI |
-| Public GitHub repo | you are here; CI badge above |
+| web3.js v2.0 compatibility verified with tests | [`kit-matrix.e2e`](test/e2e/kit-matrix.e2e.test.ts): identical matrix over `@solana/web3.js@2` **and** `@solana/kit`, through real failover, bigint fidelity asserted |
+| Wallet adapter integration (≥1 major wallet) | [sign-once bridges](src/wallet/signers.ts) (Wallet Standard: Phantom/Solflare/Backpack + legacy adapter) · runnable [demo dApp](examples/demo-dapp/) |
+| Jito/MEV routing implemented and documented | relay + atomic bundles + live tip accounts · [example](examples/jito-bundle.ts) · verified against docs.jito.wtf |
+| Observability exports working (OTel or Datadog) | [`ShieldTelemetry`](src/observability/otel.ts) + [docs/observability.md](docs/observability.md) (metric reference, collector + Datadog configs) · [live-verified example](examples/otel-console.ts) |
+| Diagnostics CLI functional | 5 commands, e2e-tested in-process, live-verified against mainnet |
+| 90%+ coverage via network drop & latency simulations | **97.9% lines / 91.5% branches / 100% functions**, thresholds enforced in CI; simulations are real HTTP servers (drops, hangs, 5xx, latency) **plus cross-node consistency divergence** |
+| Public GitHub repo | you are here |
 
 ## Judging criteria → proof
 
 | Criterion | Weight | Where to look |
 |---|---|---|
-| Correctness | 40% | `TransactionManager` + `WalletPipeline` + bundles: 119 tests including simulated failure conditions; live devnet example |
-| Resilience Quality | 25% | health-scored weighted routing, circuit breakers, slot-lag demotion; real socket-destroy / refused / blackhole e2e; `simulate-drop` vs mainnet |
-| Developer Experience | 20% | 30-second quickstart above, 5-command CLI, OTel in three lines, 4 runnable examples + demo dApp |
-| Test Coverage & Simulation Quality | 15% | 98.7%/91.7% enforced thresholds; simulations are a real HTTP server, not mocks-only |
+| Correctness | 40% | [lifecycle engine](src/transaction/lifecycle.ts) + [property fuzz: never-double-lands](test/sim/lifecycle.fuzz.test.ts) + [cross-node consistency tests](test/sim/cross-node.test.ts) + [landing-rate A/B](scripts/landing-sim.ts) — 142 tests |
+| Resilience Quality | 25% | health-scored weighted routing, circuit breakers, slot-lag demotion; real socket-destroy / refused / blackhole / latency sims; `simulate-drop` vs live mainnet |
+| Developer Experience | 20% | 30-second quickstart, 5-command CLI, OTel in 3 lines, 4 runnable examples + demo dApp, typed errors with verbatim node diagnostics |
+| Tests & Simulation Quality | 15% | 97.9%/91.5% enforced in CI on node 20+22; unreliable-network AND inconsistent-cluster simulation classes; deterministic landing-rate table |
 
-## Development
+## Reviewer tour — verify this submission in 10 minutes
 
 ```bash
-npm install
-npm run dev        # watch build
-npm test           # vitest
-npm run test:cov   # coverage
-npm run cli -- health --endpoints https://api.mainnet-beta.solana.com
+git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield
+npm ci
+npm test                 # 142 tests: unit + real-server e2e + cross-node consistency + fuzz
+npm run test:cov         # 97.9% lines / 91.5% branches, thresholds enforced
+npm run sim:landing      # the landing-rate A/B table above, reproduced deterministically
+npm run cli -- health -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com
+npm run cli -- simulate-drop -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com \
+  -d https://api.mainnet-beta.solana.com --after 2 --duration 4 -n 12 -i 500
+npx tsx examples/otel-console.ts          # OTel metrics flowing from live devnet traffic
+# wallet demo (Phantom/Solflare/Backpack + devnet):
+npm run build && cd examples/demo-dapp && npm install && npm run dev
 ```
 
 ## License
 
-MIT
+[MIT](LICENSE)
