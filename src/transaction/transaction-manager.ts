@@ -32,11 +32,23 @@ export interface JitoConfig {
   readonly fallbackToRpc?: boolean;
 }
 
+/** Submission lifecycle events — consumed by logging and the OpenTelemetry exporter. */
+export type TransactionEvent =
+  | { readonly type: 'submitted'; readonly route: 'jito' | 'rpc' }
+  | { readonly type: 'jito_fallback' }
+  | {
+      readonly type: 'confirm_outcome';
+      readonly outcome: 'confirmed' | 'expired' | 'timed_out' | 'reverted';
+      readonly elapsedMs: number;
+    };
+
 export interface TransactionManagerOptions {
   readonly jito?: JitoConfig;
   readonly priorityFee?: PriorityFeeConfig;
   /** Default commitment for blockhash + confirmation. Default 'confirmed'. */
   readonly commitment?: Commitment;
+  /** Lifecycle event hook; must be cheap — fired on the submission hot path. */
+  readonly onEvent?: (event: TransactionEvent) => void;
 }
 
 export interface SendAndConfirmOptions {
@@ -100,17 +112,31 @@ export class TransactionManager {
     return { blockhash: value.blockhash, lastValidBlockHeight: value.lastValidBlockHeight };
   }
 
+  private emit(event: TransactionEvent): void {
+    if (!this.options.onEvent) return;
+    try {
+      this.options.onEvent(event);
+    } catch {
+      // A telemetry listener must never be able to break submission.
+    }
+  }
+
   /** Submit a signed base64 tx, routing via Jito when configured, else RPC. */
   async submit(signedTxBase64: string, skipPreflight = false): Promise<string> {
     if (this.options.jito) {
       try {
-        return await this.submitViaJito(signedTxBase64);
+        const signature = await this.submitViaJito(signedTxBase64);
+        this.emit({ type: 'submitted', route: 'jito' });
+        return signature;
       } catch (err) {
         if (this.options.jito.fallbackToRpc === false) throw err;
+        this.emit({ type: 'jito_fallback' });
         // fall through to RPC submission
       }
     }
-    return this.submitViaRpc(signedTxBase64, skipPreflight);
+    const signature = await this.submitViaRpc(signedTxBase64, skipPreflight);
+    this.emit({ type: 'submitted', route: 'rpc' });
+    return signature;
   }
 
   private async submitViaRpc(signedTxBase64: string, skipPreflight: boolean): Promise<string> {
@@ -159,7 +185,8 @@ export class TransactionManager {
     opts?: { commitment?: Commitment; timeoutMs?: number; pollIntervalMs?: number },
   ): Promise<ConfirmResult | { expired: true } | { timedOut: true }> {
     const target = opts?.commitment ?? this.defaultCommitment;
-    const deadline = Date.now() + (opts?.timeoutMs ?? 30_000);
+    const startedAt = Date.now();
+    const deadline = startedAt + (opts?.timeoutMs ?? 30_000);
     const pollMs = opts?.pollIntervalMs ?? 2_000;
 
     while (Date.now() < deadline) {
@@ -175,18 +202,26 @@ export class TransactionManager {
       });
       const st = statuses.result?.value?.[0];
       if (st) {
-        if (st.err) throw new TransactionFailedError(signature, st.err);
+        if (st.err) {
+          this.emit({ type: 'confirm_outcome', outcome: 'reverted', elapsedMs: Date.now() - startedAt });
+          throw new TransactionFailedError(signature, st.err);
+        }
         const status = st.confirmationStatus;
         if (status && COMMITMENT_RANK[status] >= COMMITMENT_RANK[target]) {
+          this.emit({ type: 'confirm_outcome', outcome: 'confirmed', elapsedMs: Date.now() - startedAt });
           return { signature, slot: st.slot, confirmationStatus: status };
         }
       } else {
         // not yet seen — check whether the blockhash has expired
         const height = await this.getBlockHeight(target);
-        if (height > lastValidBlockHeight) return { expired: true };
+        if (height > lastValidBlockHeight) {
+          this.emit({ type: 'confirm_outcome', outcome: 'expired', elapsedMs: Date.now() - startedAt });
+          return { expired: true };
+        }
       }
       await sleep(pollMs);
     }
+    this.emit({ type: 'confirm_outcome', outcome: 'timed_out', elapsedMs: Date.now() - startedAt });
     return { timedOut: true };
   }
 

@@ -52,6 +52,29 @@ export interface HealthConfig {
   readonly maxSlotLag?: number;
 }
 
+/** Routing lifecycle events — consumed by logging and the OpenTelemetry exporter. */
+export type TransportEvent =
+  | {
+      readonly type: 'request_success';
+      readonly endpoint: string;
+      readonly latencyMs: number;
+      /** 0 = served by the first-choice node; >0 means a failover happened. */
+      readonly attempt: number;
+    }
+  | {
+      readonly type: 'request_fault';
+      readonly endpoint: string;
+      readonly errorClass: ErrorClass;
+      readonly attempt: number;
+    }
+  | {
+      /** Chain answered with a JSON-RPC error — surfaced to the caller, not a node fault. */
+      readonly type: 'rpc_error_passthrough';
+      readonly endpoint: string;
+      readonly latencyMs: number;
+    }
+  | { readonly type: 'all_endpoints_failed'; readonly attempts: number };
+
 export interface ResilientTransportConfig {
   /** Two or more endpoints. Order is irrelevant — routing is health-driven. */
   readonly endpoints: ReadonlyArray<string | EndpointConfig>;
@@ -63,6 +86,8 @@ export interface ResilientTransportConfig {
   readonly health?: HealthConfig;
   /** Injected transport factory (for tests / custom fetch). Defaults to web3.js v2. */
   readonly transportFactory?: (endpoint: EndpointConfig) => RpcTransport;
+  /** Lifecycle event hook; must be cheap — fired on the request hot path. */
+  readonly onEvent?: (event: TransportEvent) => void;
 }
 
 export type CircuitState = 'closed' | 'open' | 'half_open';

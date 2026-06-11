@@ -23,10 +23,16 @@ export {
   type Commitment,
   type LatestBlockhash,
   type JitoConfig,
+  type TransactionEvent,
   type TransactionManagerOptions,
   type SendAndConfirmOptions,
   type ConfirmResult,
 } from './transaction/transaction-manager.js';
+export {
+  ShieldTelemetry,
+  type HealthSource,
+  type ShieldTelemetryOptions,
+} from './observability/otel.js';
 export {
   fromWalletStandard,
   fromLegacyAdapter,
@@ -55,4 +61,5 @@ export {
   type ResilientTransportConfig,
   type RpcRequest,
   type RpcTransport,
+  type TransportEvent,
 } from './types/index.js';

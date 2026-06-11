@@ -16,6 +16,7 @@ import type {
   ResilientTransportConfig,
   RpcRequest,
   RpcTransport,
+  TransportEvent,
 } from '../types/index.js';
 import { classifyError, EndpointHealth, isEndpointFault } from './health.js';
 import { SlotMonitor, type SlotMonitorOptions } from './slot-monitor.js';
@@ -70,6 +71,15 @@ export function createResilientTransport(config: ResilientTransportConfig): Resi
   const factory = config.transportFactory ?? defaultTransportFactory;
   const timeoutMs = config.requestTimeoutMs ?? 10_000;
   const maxAttempts = config.maxAttempts ?? endpoints.length;
+  const onEvent = config.onEvent;
+  const emit = (event: TransportEvent): void => {
+    if (!onEvent) return;
+    try {
+      onEvent(event);
+    } catch {
+      // A telemetry listener must never be able to break request routing.
+    }
+  };
 
   const pool = endpoints.map((cfg) => ({
     cfg,
@@ -104,20 +114,27 @@ export function createResilientTransport(config: ResilientTransportConfig): Resi
         : timeoutCtrl.signal;
       try {
         const out = await node.transport<T>({ payload: request.payload, signal });
-        node.health.recordSuccess(Date.now() - start);
+        const latencyMs = Date.now() - start;
+        node.health.recordSuccess(latencyMs);
+        emit({ type: 'request_success', endpoint: node.cfg.url, latencyMs, attempt: i });
         return out;
       } catch (err) {
-        if (!isEndpointFault(classifyError(err))) {
+        const errorClass = classifyError(err);
+        if (!isEndpointFault(errorClass)) {
           // Genuine JSON-RPC error: surface it, do not penalise the node or fail over.
-          node.health.recordSuccess(Date.now() - start);
+          const latencyMs = Date.now() - start;
+          node.health.recordSuccess(latencyMs);
+          emit({ type: 'rpc_error_passthrough', endpoint: node.cfg.url, latencyMs });
           throw err;
         }
         node.health.recordFailure(Date.now());
+        emit({ type: 'request_fault', endpoint: node.cfg.url, errorClass, attempt: i });
         lastErr = err;
       } finally {
         clearTimeout(timer);
       }
     }
+    emit({ type: 'all_endpoints_failed', attempts });
     throw new Error(`solana-rpc-shield: all ${attempts} endpoint attempt(s) failed`, {
       cause: lastErr,
     });
