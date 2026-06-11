@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getBase58Decoder } from '@solana/kit';
 import { TransactionManager } from '../../src/transaction/transaction-manager.js';
 import {
   toBase64,
@@ -241,6 +242,38 @@ describe('WalletPipeline.sendAndConfirm', () => {
     await expect(pipeline.sendAndConfirm({ buildTx: () => Uint8Array.from([7]) })).rejects.toThrow(
       /not confirmed within 20ms/,
     );
+  });
+
+  it('"already been processed" on first submit confirms the landed tx with ONE prompt', async () => {
+    // The wallet user signed; some other path (the wallet's own send, a
+    // previous tab, a lost response) had already landed these bytes. The
+    // pipeline must derive the signature locally, confirm honestly, and
+    // never re-prompt — reporting failure here would push the user to retry
+    // and double-spend.
+    const { signer, prompts } = countingWallet();
+    const feePayerSig = new Uint8Array(64).fill(0x5d);
+    const unsigned = new Uint8Array(1 + 64 + 32).fill(3);
+    unsigned[0] = 1;
+    unsigned.set(feePayerSig, 1); // countingWallet appends 0xff — bytes [1..65) stay intact
+    const expectedSig = getBase58Decoder().decode(feePayerSig);
+
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => ({ result: { value: { blockhash: 'BH1', lastValidBlockHeight: 100 } } }),
+        sendTransaction: () => ({
+          error: { code: -32002, message: 'This transaction has already been processed' },
+        }),
+        getSignatureStatuses: (params) => {
+          const [sigs] = params as [string[]];
+          return { result: { value: sigs.map(() => ({ confirmationStatus: 'confirmed', err: null, slot: 41 })) } };
+        },
+      }),
+    );
+    const pipeline = new WalletPipeline(tm, signer, FAST);
+    const res = await pipeline.sendAndConfirm({ buildTx: () => unsigned });
+
+    expect(res.signature).toBe(expectedSig); // derived from the wallet-signed bytes
+    expect(prompts()).toBe(1); // the user is NEVER re-prompted for a landed tx
   });
 
   it('a throwing onEvent listener never breaks the submission', async () => {

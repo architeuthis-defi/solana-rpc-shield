@@ -60,6 +60,14 @@ interface Scenario {
   landPlan: LandSpec[];
   submitNetworkErrorPct: number; // 0..30 (% of pre-acceptance submit failures)
   routeSeed: number;
+  /**
+   * An external submitter (earlier run, wallet's own send, another process)
+   * landed the epoch-0 bytes BEFORE our first submit: the node answers
+   * "already been processed" instead of accepting. The engine must derive
+   * the signature locally and confirm honestly — never report failure for
+   * a landed transaction, never double-land.
+   */
+  externalPreSubmit?: boolean;
   engine: {
     maxEpochs: number;
     confirmTimeoutMs: number;
@@ -174,6 +182,14 @@ async function runScenario(s: Scenario): Promise<RunOutcome> {
         sig = `FSIG${++sigCounter}`;
         wireToSig.set(wire, sig);
       }
+      if (s.externalPreSubmit && wire.endsWith('|payload-0') && !acceptedSigs.has(sig)) {
+        // The external submitter won the race: the ledger accepted these
+        // exact bytes before our first submit ever reached a node.
+        const plan = s.landPlan[acceptCounter % s.landPlan.length]!;
+        acceptCounter++;
+        acceptedSigs.set(sig, { acceptedAtVt: vt, plan, lastValid: bh.lastValid });
+        throw { code: -32002, message: 'Transaction simulation failed: This transaction has already been processed' };
+      }
       if (!acceptedSigs.has(sig)) {
         const plan = s.landPlan[acceptCounter % s.landPlan.length]!;
         acceptCounter++;
@@ -181,6 +197,9 @@ async function runScenario(s: Scenario): Promise<RunOutcome> {
       }
       return sig;
     },
+    // Mirrors production exactly: the signature is a pure function of the
+    // wire (signatureOfWire over real bytes; the model's wire→sig map here).
+    deriveSignature: (wire) => wireToSig.get(wire) ?? null,
     getStatuses: async (sigs, history) => {
       const node = pickNode();
       return sigs.map((sig) => {
@@ -289,6 +308,53 @@ describe('lifecycle property fuzz', () => {
         }
       }),
       { numRuns: 200, verbose: 1 },
+    );
+  });
+
+  it('an external pre-submitter ("already been processed") never produces a lie or a double-land', async () => {
+    await fc.assert(
+      fc.asyncProperty(scenario(1_500), async (raw) => {
+        // Isolate the already-processed path from UNRELATED first-submit
+        // failures: random network errors and exhausted Blockhash-not-found
+        // retries terminate the run before the node can say "already
+        // processed" — those races are property #1's territory. Submit
+        // retries cover ≤500 virtual ms of propagation, so clamp below it.
+        const s: Scenario = {
+          ...raw,
+          externalPreSubmit: true,
+          submitNetworkErrorPct: 0,
+          nodes: raw.nodes.map((n) => ({ ...n, knowsBlockhashAfterMs: Math.min(n.knowsBlockhashAfterMs, 450) })),
+        };
+        const run = await runScenario(s);
+
+        // Non-vacuous: the engine actually hit the already-processed path.
+        const ap = run.events.find((e) => e.type === 'already_processed');
+        expect(ap).toBeDefined();
+        const externalSig = (ap as { signature: string }).signature;
+
+        // I1 still holds with a third-party racing us.
+        const landedFinal = run.landedErrFreeAt(run.vtAtSettle + HORIZON_AFTER_SETTLE);
+        expect(landedFinal.length).toBeLessThanOrEqual(1);
+
+        // I2: a resolved signature really landed.
+        if (run.resolved) {
+          expect(run.landedErrFreeAt(run.vtAtSettle)).toContain(run.resolved.signature);
+        }
+
+        // The headline of this scenario: when the externally-landed tx is
+        // err-free on the ledger and the engine resolved, it resolved to THAT
+        // transaction — it cannot have signed and landed a second one.
+        if (run.resolved && run.landedErrFreeAt(run.vtAtSettle).includes(externalSig)) {
+          expect(run.resolved.signature).toBe(externalSig);
+        }
+
+        // And the engine never reported a submit FAILURE for the landed tx:
+        // a thrown RpcSubmitError mentioning "already" would be the old bug.
+        if (run.thrown) {
+          expect(String((run.thrown as Error).message ?? run.thrown)).not.toMatch(/already been processed/i);
+        }
+      }),
+      { numRuns: 150, verbose: 1 },
     );
   });
 });

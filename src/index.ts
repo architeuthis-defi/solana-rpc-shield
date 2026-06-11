@@ -39,6 +39,7 @@ export {
   type SendAndConfirmOptions,
   type ConfirmResult,
 } from './transaction/transaction-manager.js';
+export { signatureOfWire, toBase58 } from './transaction/wire.js';
 export {
   ShieldTelemetry,
   type HealthSource,

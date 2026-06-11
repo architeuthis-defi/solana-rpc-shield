@@ -21,6 +21,7 @@ import {
   TransactionTimedOutError,
 } from './errors.js';
 import { runTxLifecycle, type LifecycleEvent, type SignatureStatusEntry } from './lifecycle.js';
+import { signatureOfWire } from './wire.js';
 import { PriorityFeeEstimator, type PriorityFeeConfig } from './priority-fee.js';
 
 // Error classes live in errors.ts (shared with the lifecycle engine); re-exported
@@ -437,6 +438,7 @@ export class TransactionManager {
           getStatuses: (sigs, searchHistory) =>
             this.getSignatureStatuses(sigs, { searchTransactionHistory: searchHistory }),
           getBlockHeight: (c) => this.getBlockHeight(c),
+          deriveSignature: (wire) => signatureOfWire(wire),
         },
         {
           getSignedTx: (blockhash) => opts.buildSignedTx(blockhash),

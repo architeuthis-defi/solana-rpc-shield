@@ -28,6 +28,7 @@ import {
   type TransactionManager,
 } from '../transaction/transaction-manager.js';
 import { runTxLifecycle, type LifecycleEvent } from '../transaction/lifecycle.js';
+import { signatureOfWire } from '../transaction/wire.js';
 import type { WalletSigner } from './signers.js';
 
 /** Encode signed transaction bytes for `sendTransaction` (Node + browser). */
@@ -128,6 +129,7 @@ export class WalletPipeline {
           getStatuses: (sigs, searchHistory) =>
             this.manager.getSignatureStatuses(sigs, { searchTransactionHistory: searchHistory }),
           getBlockHeight: (c) => this.manager.getBlockHeight(c),
+          deriveSignature: (wire) => signatureOfWire(wire),
         },
         {
           getSignedTx: async (blockhash) => {
@@ -140,7 +142,9 @@ export class WalletPipeline {
           commitment: opts.commitment ?? this.defaults.commitment ?? 'confirmed',
           maxEpochs: 1 + (resignOnExpiry ? maxResigns : 0),
           resignOnExpiry,
-          confirmTimeoutMs: opts.confirmTimeoutMs ?? this.defaults.confirmTimeoutMs ?? 60_000,
+          // Same rule as the keypair path: the per-epoch budget must exceed
+          // the blockhash lifetime (~60-90s) for expiry to be verifiable.
+          confirmTimeoutMs: opts.confirmTimeoutMs ?? this.defaults.confirmTimeoutMs ?? 120_000,
           pollIntervalMs: opts.pollIntervalMs ?? this.defaults.pollIntervalMs ?? 2_000,
           rebroadcastIntervalMs: opts.rebroadcastIntervalMs ?? this.defaults.rebroadcastIntervalMs ?? 4_000,
           skipPreflightFirstSend: opts.skipPreflight ?? this.defaults.skipPreflight ?? false,

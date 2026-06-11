@@ -1,7 +1,7 @@
 # solana-rpc-shield
 
 [![CI](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml)
-[![coverage](https://img.shields.io/badge/coverage-98.2%25_lines_·_92.4%25_branches-brightgreen)](vitest.config.ts)
+[![coverage](https://img.shields.io/badge/coverage-98.2%25_lines_·_92.8%25_branches-brightgreen)](vitest.config.ts)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 
@@ -96,10 +96,11 @@ retry, again. That is the funds-loss bug class the lifecycle engine exists to ki
 deterministic (failure assignment by intent index); run it yourself. *Simulated network, not
 mainnet — the value is that the table reproduces exactly.*
 
-**Property-based fuzz** — [~500 randomized cluster schedules per CI run](test/sim/lifecycle.fuzz.test.ts)
-(node status lag, height skew, blockhash propagation delay, landing delays, reverts, drops) on a
-virtual clock. Headline invariant: **never double-lands**, plus truthful-confirm,
-resign-only-after-verified-death, truthful-failure, termination.
+**Property-based fuzz** — [~650 randomized cluster schedules per CI run](test/sim/lifecycle.fuzz.test.ts)
+(node status lag, height skew, blockhash propagation delay, landing delays, reverts, drops, an
+external pre-submitter racing the first send) on a virtual clock. Headline invariant: **never
+double-lands**, plus truthful-confirm, resign-only-after-verified-death, truthful-failure,
+termination.
 
 **Live bench** against the three official clusters (2026-06-11, EU residential network):
 
@@ -152,7 +153,10 @@ One logical send = up to `maxAttempts` blockhash epochs:
 
 1. **Sign once per epoch**, submit with `maxRetries: 0`; a `Blockhash not found` preflight from a
    lagging node is retried (bounded), every other node answer surfaces **verbatim** as
-   `RpcSubmitError` (code, message, simulation logs).
+   `RpcSubmitError` (code, message, simulation logs). One exception is a *success* in disguise:
+   `already been processed` means the ledger HAS these bytes — the signature is derived locally
+   from the wire ([`signatureOfWire`](src/transaction/wire.ts), the node's error body doesn't
+   carry it) and confirmed like any landed transaction instead of being reported as a failure.
 2. **Poll all submitted signatures** every 2s; **re-broadcast the same signed bytes** on the same
    cadence (leader rotates every ~1.6s). Rebroadcast errors are non-authoritative — the status
    poll is the truth.
@@ -268,8 +272,8 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
 ```bash
 git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield
 npm ci
-npm test                 # 158 tests: unit + real-server e2e + cross-node consistency + fuzz
-npm run test:cov         # 98.2% lines / 92.4% branches, thresholds enforced
+npm test                 # 170 tests: unit + real-server e2e + cross-node consistency + fuzz
+npm run test:cov         # 98.2% lines / 92.8% branches, thresholds enforced
 npm run sim:landing      # the landing-rate A/B table above, reproduced deterministically
 npx tsx examples/resilient-reads.ts   # the quickstart live: reads through a pool with a dead node
 npm run cli -- health -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com

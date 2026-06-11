@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getBase58Decoder } from '@solana/kit';
 import {
   RpcSubmitError,
   TransactionExpiredError,
@@ -325,6 +326,82 @@ describe('TransactionManager.sendAndConfirm', () => {
     // Jito fetch to an unroutable host throws → fallback path returns the RPC signature.
     const res = await tm.sendAndConfirm({ buildSignedTx: async () => 'tx', pollIntervalMs: 1 });
     expect(res.signature).toBe('SIG_RPC_FALLBACK');
+  });
+});
+
+describe('TransactionManager.sendAndConfirm — "already been processed"', () => {
+  // The ledger already has these exact bytes (an earlier run, another
+  // process, a wallet's own send). The node's error body carries no
+  // signature — the engine must derive it locally from the wire and confirm
+  // the LANDED transaction instead of reporting failure for it.
+
+  const FEE_PAYER_SIG = new Uint8Array(64).fill(0xc3);
+  const wireBytes = new Uint8Array(1 + 64 + 32).fill(9);
+  wireBytes[0] = 1;
+  wireBytes.set(FEE_PAYER_SIG, 1);
+  const WIRE = Buffer.from(wireBytes).toString('base64');
+  // base58 of the fee-payer signature — what the ledger knows this tx as.
+  // Computed by @solana/kit, NOT by the code under test (independent oracle).
+  const EXPECTED_SIG = getBase58Decoder().decode(FEE_PAYER_SIG);
+
+  it('derives the signature, polls it, and returns the landed transaction', async () => {
+    let submits = 0;
+    const polled: string[][] = [];
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: () => {
+          submits++;
+          return {
+            error: { code: -32002, message: 'Transaction simulation failed: This transaction has already been processed' },
+          };
+        },
+        getSignatureStatuses: (params) => {
+          const [sigs] = params as [string[]];
+          polled.push(sigs);
+          return { result: { value: sigs.map(() => ({ confirmationStatus: 'confirmed', err: null, slot: 77 })) } };
+        },
+      }),
+    );
+    const res = await tm.sendAndConfirm({ buildSignedTx: async () => WIRE, pollIntervalMs: 1 });
+
+    expect(res.signature).toBe(EXPECTED_SIG); // derived locally — never returned by the node
+    expect(res.confirmationStatus).toBe('confirmed');
+    expect(submits).toBe(1); // no blind retries against a landed transaction
+    expect(polled[0]).toEqual([EXPECTED_SIG]); // the poll loop asked about the derived signature
+  });
+
+  it('an already-processed tx that REVERTED on-chain still surfaces as TransactionFailedError', async () => {
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: () => ({
+          error: { code: -32002, message: 'This transaction has already been processed' },
+        }),
+        getSignatureStatuses: () => ({
+          result: { value: [{ confirmationStatus: 'finalized', err: { InstructionError: [0, 'Custom'] }, slot: 5 }] },
+        }),
+      }),
+    );
+    await expect(
+      tm.sendAndConfirm({ buildSignedTx: async () => WIRE, pollIntervalMs: 1 }),
+    ).rejects.toBeInstanceOf(TransactionFailedError); // honest verdict, not a fake submit failure
+  });
+
+  it('falls back to the verbatim node error when the wire is not derivable', async () => {
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: () => ({
+          error: { code: -32002, message: 'This transaction has already been processed' },
+        }),
+        getSignatureStatuses: () => ({ result: { value: [null] } }),
+      }),
+    );
+    // 'not-base64-tx' decodes to <65 bytes → signatureOfWire → null → old behavior.
+    await expect(
+      tm.sendAndConfirm({ buildSignedTx: async () => 'tx', pollIntervalMs: 1 }),
+    ).rejects.toBeInstanceOf(RpcSubmitError);
   });
 });
 

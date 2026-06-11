@@ -59,12 +59,20 @@ export interface LifecycleDeps {
     searchHistory: boolean,
   ): Promise<ReadonlyArray<SignatureStatusEntry | null>>;
   getBlockHeight(commitment: Commitment): Promise<number>;
+  /**
+   * Derive the transaction signature from the signed wire WITHOUT a node —
+   * how the engine recovers when submit answers "already been processed"
+   * (the ledger has these bytes; the error body has no signature). Optional:
+   * without it the verdict surfaces verbatim, the pre-0.3.0 behavior.
+   */
+  deriveSignature?(wire: string): string | null;
   clock?: LifecycleClock;
 }
 
 export type LifecycleEvent =
   | { readonly type: 'epoch_started'; readonly epoch: number; readonly blockhash: string }
   | { readonly type: 'submitted'; readonly signature: string; readonly epoch: number }
+  | { readonly type: 'already_processed'; readonly signature: string; readonly epoch: number }
   | {
       readonly type: 'submit_retry';
       readonly epoch: number;
@@ -224,6 +232,21 @@ export async function runTxLifecycle(deps: LifecycleDeps, opts: LifecycleOptions
         return await deps.submit(wire, opts.skipPreflightFirstSend);
       } catch (err) {
         const n = normalizeSubmitError(err);
+        if (n.isAlreadyProcessed) {
+          // "Already been processed" is a SUCCESS signal, not a failure: the
+          // ledger has these exact bytes (an earlier run, another process, a
+          // wallet's own send, or our own request whose response was lost).
+          // The error body carries no signature, so derive it locally and let
+          // the poll loop confirm honestly — throwing here would report
+          // failure for a transaction that LANDED.
+          const sig = deps.deriveSignature?.(wire) ?? null;
+          if (sig !== null) {
+            emit({ type: 'already_processed', signature: sig, epoch });
+            return sig;
+          }
+          // No derivation available (exotic wire shape) — surface the node's
+          // verdict verbatim rather than guess.
+        }
         if (!n.isBlockhashNotFound || attempt >= opts.submitRetries) throw err;
         // A lagging node preflighted against a bank that doesn't know this
         // blockhash yet — retry routes through (likely) another node.

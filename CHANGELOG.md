@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 — 2026-06-12
+
+### Added
+
+- **"Already been processed" is now a success signal, not a failure.** When
+  a submit answers that the ledger already has these exact bytes (an earlier
+  run, another process, a wallet's own send), the engine derives the
+  signature locally — `signatureOfWire`, base58 of bytes [1..65) of the
+  signed wire; the node's error body carries no signature — tracks it, and
+  lets the poll loop confirm the landed transaction honestly. Previously
+  this threw `RpcSubmitError` *for a transaction that landed*: the exact
+  lie-to-the-user class this engine exists to kill, and the push that makes
+  users retry and double-spend. Both paths (keypair + wallet) get it via the
+  shared engine; the wallet user is never re-prompted.
+- `signatureOfWire` / `toBase58` exported — derive a transaction's signature
+  from its signed bytes without asking a node (works in Node and browsers,
+  cross-checked against `@solana/kit`'s base58 on a real mainnet wire).
+- New fuzz property: an external pre-submitter racing our first send
+  ("already been processed") can produce neither a false failure nor a
+  double-land — ~650 randomized cluster schedules per CI run now.
+- `LifecycleDeps.deriveSignature` seam + `already_processed` lifecycle event
+  (observable in telemetry).
+
 ## 0.2.1 — 2026-06-11
 
 ### Changed

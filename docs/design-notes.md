@@ -19,19 +19,27 @@ planned seam:
 Deferred from 0.2.0: expanding the duplicate-submission surface in the same
 release that introduces signature tracking would have coupled two risks.
 
-## Ambiguous submit failures (known limit)
+## Ambiguous submit failures (partially closed in 0.3.0)
 
-A network error on `sendTransaction` is ambiguous: the node may have received
-and forwarded the transaction before the connection died. The engine
-currently treats a first-submit failure as "not submitted" — which is exactly
-right only for pre-acceptance failures.
+A first-submit failure used to be treated wholesale as "not submitted". Two
+distinct cases hide in there:
 
-The complete fix is to **derive the signature locally before submitting**
-(the signature is the first 64 bytes of the signed wire — a client never
-needs the node's reply to know it) and track it regardless of the submit
-outcome. That requires a `signatureOf(wire)` dependency on the engine; the
-fuzz model documents the boundary today (network errors are modeled
-pre-acceptance). Planned for 0.3.0.
+- **"Already been processed" — CLOSED (0.3.0).** The node's answer proves the
+  ledger has these exact bytes; the error body just doesn't say which
+  signature. `signatureOfWire` (src/transaction/wire.ts) derives it locally —
+  base58 of bytes [1..65) of the signed wire — the engine tracks it and the
+  poll loop confirms the landed transaction honestly. Property-fuzzed: an
+  external pre-submitter racing us can no longer produce a false failure or
+  a double-land.
+- **Silent network drop — still a known limit.** A connection that dies
+  mid-`sendTransaction` is ambiguous: the node may have received and
+  forwarded the wire before the socket closed, and there is no node verdict
+  at all to react to. The complete fix is to track the locally-derived
+  signature on EVERY submit regardless of outcome; the machinery now exists,
+  but widening the tracked set on ambiguous paths interacts with death
+  verification (every tracked signature must be swept) and deserves its own
+  release with its own fuzz scenarios. The model documents this boundary
+  (network errors are modeled pre-acceptance).
 
 ## WebSocket subscriptions (out of scope by design)
 
