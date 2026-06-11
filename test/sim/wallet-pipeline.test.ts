@@ -242,4 +242,30 @@ describe('WalletPipeline.sendAndConfirm', () => {
       /not confirmed within 20ms/,
     );
   });
+
+  it('a throwing onEvent listener never breaks the submission', async () => {
+    // dApp telemetry code is outside our control; a listener that throws on
+    // every event must not take the user's transaction down with it.
+    const { signer, prompts } = countingWallet();
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => ({ result: { value: { blockhash: 'BH1', lastValidBlockHeight: 100 } } }),
+        sendTransaction: () => ({ result: 'SIG1' }),
+        getSignatureStatuses: () => ({ result: { value: [{ confirmationStatus: 'confirmed', err: null, slot: 5 }] } }),
+      }),
+    );
+    let eventsSeen = 0;
+    const pipeline = new WalletPipeline(tm, signer, FAST);
+    const res = await pipeline.sendAndConfirm({
+      buildTx: () => Uint8Array.from([1, 2, 3]),
+      onEvent: () => {
+        eventsSeen++;
+        throw new Error('listener blew up');
+      },
+    });
+
+    expect(res.signature).toBe('SIG1'); // landed despite the hostile listener
+    expect(prompts()).toBe(1);
+    expect(eventsSeen).toBeGreaterThan(0); // the listener WAS invoked (non-vacuous)
+  });
 });

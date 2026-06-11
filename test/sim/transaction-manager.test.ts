@@ -327,3 +327,31 @@ describe('TransactionManager.sendAndConfirm', () => {
     expect(res.signature).toBe('SIG_RPC_FALLBACK');
   });
 });
+
+describe('TransactionManager.confirm (standalone status polling)', () => {
+  // The public confirm() is for transactions submitted elsewhere (another
+  // process, a wallet's own send) — the caller still deserves honest
+  // expiry/timeout verdicts instead of polling forever.
+
+  it('reports expiry when the signature is never seen and the blockhash dies', async () => {
+    const tm = new TransactionManager(
+      mockRpc({
+        getSignatureStatuses: () => ({ result: { value: [null] } }), // never seen
+        getBlockHeight: () => ({ result: 101 }), // past lastValidBlockHeight=100
+      }),
+    );
+    const res = await tm.confirm('SIG_GONE', 100, { timeoutMs: 1_000, pollIntervalMs: 1 });
+    expect(res).toEqual({ expired: true });
+  });
+
+  it('reports a timeout when the signature stays unseen but the blockhash is alive', async () => {
+    const tm = new TransactionManager(
+      mockRpc({
+        getSignatureStatuses: () => ({ result: { value: [null] } }),
+        getBlockHeight: () => ({ result: 50 }), // still < lastValidBlockHeight
+      }),
+    );
+    const res = await tm.confirm('SIG_SLOW', 100, { timeoutMs: 25, pollIntervalMs: 1 });
+    expect(res).toEqual({ timedOut: true });
+  });
+});

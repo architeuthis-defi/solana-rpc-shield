@@ -45,4 +45,12 @@ describe('weightedOrder', () => {
     expect(share).toBeGreaterThan(0.71);
     expect(share).toBeLessThan(0.79);
   });
+
+  it('clamps the float-dust miss to the final candidate instead of crashing', () => {
+    // 0.1 + 0.2 === 0.30000000000000004: with rng() at the top of its range the
+    // cursor lands a hair PAST the last mass (r stays ~2.8e-17 > 0), findIndex
+    // misses every candidate, and the clamp must hand the draw to the final one.
+    const order = weightedOrder(items([0.1, 0.2]), () => 1);
+    expect(order).toEqual(['n1', 'n0']); // clamp → last candidate wins the draw
+  });
 });

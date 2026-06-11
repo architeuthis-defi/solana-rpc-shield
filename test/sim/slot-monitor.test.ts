@@ -87,4 +87,92 @@ describe('SlotMonitor', () => {
     expect(a.lags).toEqual([]);
     expect(b.lags).toEqual([]);
   });
+
+  it('a slot-0 chain in a mixed pool is scored against itself, not poisoned or dropped', async () => {
+    // slot 0 never wins the freshest-by-chain race (`0 > 0` is false), so that
+    // chain has no entry in the freshest map and the recording falls back to
+    // the node's own slot — lag 0, not a skip and not a cross-chain compare.
+    const mainnet = mockTarget('https://mainnet', 500, 'G_MAIN');
+    const freshChain = mockTarget('https://localnet', 0, 'G_LOCAL');
+    const monitor = new SlotMonitor([mainnet, freshChain]);
+
+    await monitor.tick();
+
+    expect(mainnet.lags).toEqual([0]);
+    expect(freshChain.lags).toEqual([0]); // scored via the own-slot fallback
+  });
+
+  it('resolves genesis once and serves later ticks from the cache', async () => {
+    let genesisCalls = 0;
+    const target = mockTarget('https://cached', 500);
+    const inner = target.transport;
+    (target as { transport: SlotProbeTarget['transport'] }).transport = async (req: RpcRequest) => {
+      if ((req.payload as { method: string }).method === 'getGenesisHash') genesisCalls++;
+      return inner(req);
+    };
+    const monitor = new SlotMonitor([target]);
+
+    await monitor.tick();
+    await monitor.tick();
+
+    expect(genesisCalls).toBe(1); // second round hits the cache
+    expect(target.lags).toEqual([0, 0]); // both rounds still scored
+  });
+
+  it('treats a malformed genesis response (non-string) as chain-unknown', async () => {
+    const malformed = mockTarget('https://malformed', 500);
+    const inner = malformed.transport;
+    (malformed as { transport: SlotProbeTarget['transport'] }).transport = (async (req: RpcRequest) => {
+      if ((req.payload as { method: string }).method === 'getGenesisHash') {
+        return { result: 42 }; // node answered, but not with a hash
+      }
+      return inner(req);
+    }) as SlotProbeTarget['transport'];
+    const monitor = new SlotMonitor([malformed]);
+
+    await monitor.tick();
+
+    expect(malformed.lags).toEqual([]); // never compared, never poisons the pool
+  });
+
+  it('treats a malformed getSlot response (non-number) as a failed probe', async () => {
+    const malformed = mockTarget('https://bad-slot', 0);
+    const inner = malformed.transport;
+    (malformed as { transport: SlotProbeTarget['transport'] }).transport = (async (req: RpcRequest) => {
+      const { method } = req.payload as { method: string };
+      if (method === 'getSlot') return { result: 'not-a-slot' };
+      return inner(req);
+    }) as SlotProbeTarget['transport'];
+    const monitor = new SlotMonitor([malformed]);
+
+    await monitor.tick();
+
+    expect(malformed.lags).toEqual([]);
+  });
+
+  it('aborts a hung probe after probeTimeoutMs and skips the node for the round', async () => {
+    // The hung node's transport resolves only via its abort signal — exactly
+    // how a black-holed HTTP request dies under AbortController in production.
+    const hung: SlotProbeTarget & { lags: number[] } = {
+      url: 'https://hung',
+      lags: [],
+      transport: (async (req: RpcRequest) => {
+        const { method } = req.payload as { method: string };
+        if (method === 'getGenesisHash') return { result: 'G1' };
+        return new Promise((_, reject) => {
+          req.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      }) as SlotProbeTarget['transport'],
+      recordSlot(own: number, freshest: number) {
+        this.lags.push(freshest - own);
+      },
+    };
+    const healthy = mockTarget('https://healthy', 700);
+    const monitor = new SlotMonitor([hung, healthy], { probeTimeoutMs: 20 });
+
+    await monitor.tick();
+
+    expect(hung.lags).toEqual([]); // timed out → skipped, not crashed
+    expect(healthy.lags).toEqual([0]); // the round still completes for the rest
+  });
 });

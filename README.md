@@ -1,7 +1,7 @@
 # solana-rpc-shield
 
 [![CI](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml)
-[![coverage](https://img.shields.io/badge/coverage-97.9%25_lines_·_91.5%25_branches-brightgreen)](vitest.config.ts)
+[![coverage](https://img.shields.io/badge/coverage-98.1%25_lines_·_92.2%25_branches-brightgreen)](vitest.config.ts)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 
@@ -264,8 +264,8 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
 ```bash
 git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield
 npm ci
-npm test                 # 142 tests: unit + real-server e2e + cross-node consistency + fuzz
-npm run test:cov         # 97.9% lines / 91.5% branches, thresholds enforced
+npm test                 # 153 tests: unit + real-server e2e + cross-node consistency + fuzz
+npm run test:cov         # 98.1% lines / 92.2% branches, thresholds enforced
 npm run sim:landing      # the landing-rate A/B table above, reproduced deterministically
 npm run cli -- health -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com
 npm run cli -- simulate-drop -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com \
