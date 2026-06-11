@@ -81,6 +81,11 @@ export class EndpointHealth {
     this.inFlight += 1;
   }
 
+  /** Requests currently in flight — read by the router's load-aware mass, so no snapshot() allocation. */
+  inFlightCount(): number {
+    return this.inFlight;
+  }
+
   recordSuccess(latencyMs: number): void {
     this.inFlight = Math.max(0, this.inFlight - 1);
     const a = this.cfg.latencyAlpha;

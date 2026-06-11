@@ -54,6 +54,17 @@ Each endpoint carries a rolling score; the router prefers the healthiest live no
 
 Slot-lag is the non-obvious one: a node can answer fast and still serve state seconds behind the cluster. Scoring on lag, not just liveness, is what separates this from a naive round-robin.
 
+### Traffic distribution (anti-rate-limit by design)
+
+A router that always picks the single best node concentrates 100% of load on it — and
+*provokes* the rate-limits it is supposed to avoid. The default `routing: 'weighted'`
+draws each request's failover order by **score-proportional sampling without
+replacement**, damped by in-flight load: healthier nodes win more often, but every
+healthy node carries a share, so no endpoint sees your full request rate. Zero-score
+nodes are last resorts, never coin-flip winners. `routing: 'best'` opts back into
+strict score ordering for paid-primary/free-backup setups (combine with per-endpoint
+`weight`).
+
 ## Transaction reliability (the core of Correctness)
 
 - **Jito relay routing** with RPC fallback — submit via Jito block-engine when configured; fall back to the resilient RPC pool on relay failure. (Never `skipPreflight` blindly; never a fixed fee.)

@@ -88,6 +88,14 @@ export interface ResilientTransportConfig {
   readonly transportFactory?: (endpoint: EndpointConfig) => RpcTransport;
   /** Lifecycle event hook; must be cheap — fired on the request hot path. */
   readonly onEvent?: (event: TransportEvent) => void;
+  /**
+   * Traffic distribution across healthy nodes. Default 'weighted' —
+   * score-proportional sampling that spreads load to prevent rate-limiting.
+   * 'best' always routes to the highest score (strict primary/backup).
+   */
+  readonly routing?: 'weighted' | 'best';
+  /** Random source for 'weighted' routing — injectable for deterministic tests. */
+  readonly rng?: () => number;
 }
 
 export type CircuitState = 'closed' | 'open' | 'half_open';

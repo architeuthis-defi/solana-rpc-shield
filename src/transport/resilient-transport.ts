@@ -19,6 +19,7 @@ import type {
   TransportEvent,
 } from '../types/index.js';
 import { classifyError, EndpointHealth, isEndpointFault } from './health.js';
+import { weightedOrder } from './routing.js';
 import { SlotMonitor, type SlotMonitorOptions } from './slot-monitor.js';
 
 function normalizeEndpoint(e: string | EndpointConfig): EndpointConfig {
@@ -93,11 +94,26 @@ export function createResilientTransport(config: ResilientTransportConfig): Resi
 
   type Node = (typeof pool)[number];
 
+  const strategy = config.routing ?? 'weighted';
+  const rng = config.rng ?? Math.random;
+
+  /**
+   * Sampling mass: health score × static weight, damped by in-flight load so
+   * concurrent bursts spread across nodes instead of queueing on one.
+   */
+  function massOf(node: Node): number {
+    return (node.health.score() * (node.cfg.weight ?? 1)) / (1 + node.health.inFlightCount());
+  }
+
   function routingOrder(now: number): Node[] {
     const live = pool.filter((p) => p.health.isAvailable(now));
     const candidates = live.length > 0 ? live : pool; // all tripped → least-bad fallback
-    return [...candidates].sort(
-      (a, b) => b.health.score() * (b.cfg.weight ?? 1) - a.health.score() * (a.cfg.weight ?? 1),
+    if (strategy === 'best') {
+      return [...candidates].sort((a, b) => massOf(b) - massOf(a));
+    }
+    return weightedOrder(
+      candidates.map((node) => ({ item: node, mass: massOf(node) })),
+      rng,
     );
   }
 
