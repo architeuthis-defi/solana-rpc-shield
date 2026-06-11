@@ -55,6 +55,8 @@ export class ShieldTelemetry {
   private readonly txJitoFallbacks: Counter;
   private readonly txConfirmations: Counter;
   private readonly txConfirmDuration: Histogram;
+  private readonly bundlesSubmitted: Counter;
+  private readonly bundleOutcomes: Counter;
   private readonly walletPrompts: Counter;
   private readonly walletRebroadcasts: Counter;
 
@@ -97,6 +99,12 @@ export class ShieldTelemetry {
     this.txConfirmDuration = this.meter.createHistogram('rpc_shield.tx.confirm.duration', {
       unit: 'ms',
       description: 'Time from confirmation start to a terminal outcome',
+    });
+    this.bundlesSubmitted = this.meter.createCounter('rpc_shield.tx.bundles_submitted', {
+      description: 'Jito bundles submitted (1..5 txs each)',
+    });
+    this.bundleOutcomes = this.meter.createCounter('rpc_shield.tx.bundle_outcomes', {
+      description: 'Bundle terminal outcomes (landed | failed | timed_out)',
     });
     this.walletPrompts = this.meter.createCounter('rpc_shield.wallet.prompts', {
       description: 'Wallet sign prompts shown to the user (the UX cost being minimised)',
@@ -186,6 +194,12 @@ export class ShieldTelemetry {
       case 'confirm_outcome':
         this.txConfirmations.add(1, { outcome: event.outcome });
         this.txConfirmDuration.record(event.elapsedMs, { outcome: event.outcome });
+        break;
+      case 'bundle_submitted':
+        this.bundlesSubmitted.add(1);
+        break;
+      case 'bundle_outcome':
+        this.bundleOutcomes.add(1, { outcome: event.outcome });
         break;
     }
   };

@@ -40,6 +40,12 @@ export type TransactionEvent =
       readonly type: 'confirm_outcome';
       readonly outcome: 'confirmed' | 'expired' | 'timed_out' | 'reverted';
       readonly elapsedMs: number;
+    }
+  | { readonly type: 'bundle_submitted'; readonly txCount: number }
+  | {
+      readonly type: 'bundle_outcome';
+      readonly outcome: 'landed' | 'failed' | 'timed_out';
+      readonly elapsedMs: number;
     };
 
 export interface TransactionManagerOptions {
@@ -81,12 +87,52 @@ export class TransactionFailedError extends Error {
   }
 }
 
+/** A bundle that landed with an error (or was rejected) — carries the engine's error object. */
+export class BundleFailedError extends Error {
+  readonly bundleId: string;
+  constructor(bundleId: string, cause: unknown) {
+    super(`bundle ${bundleId} failed: ${JSON.stringify(cause)}`, { cause });
+    this.name = 'BundleFailedError';
+    this.bundleId = bundleId;
+  }
+}
+
+/**
+ * Jito tip floor (lamports), per docs.jito.wtf (verified 2026-06-11). High-demand
+ * periods need more — treat as a floor, not a recommendation.
+ */
+export const MIN_JITO_TIP_LAMPORTS = 1_000;
+/** Block-engine hard limit per bundle (docs.jito.wtf, verified 2026-06-11). */
+export const MAX_BUNDLE_TXS = 5;
+
+/** A landed bundle's terminal status. */
+export interface BundleStatus {
+  readonly bundleId: string;
+  readonly slot: number | undefined;
+  readonly confirmationStatus: Commitment;
+}
+
+/** Raw getBundleStatuses entry (snake_case per the block-engine API). */
+interface RawBundleStatus {
+  readonly bundle_id?: string;
+  readonly slot?: number;
+  readonly confirmation_status?: Commitment;
+  readonly err?: unknown;
+}
+
+/** The engine encodes success as `{ Ok: null }` (or no err at all). */
+function bundleErrIsOk(err: unknown): boolean {
+  if (err === null || err === undefined) return true;
+  return typeof err === 'object' && 'Ok' in err && (err as { Ok: unknown }).Ok === null;
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export class TransactionManager {
   private readonly transport: RpcTransport;
   private readonly options: TransactionManagerOptions;
   private readonly defaultCommitment: Commitment;
+  private tipAccounts: readonly string[] | undefined;
   readonly fees: PriorityFeeEstimator;
 
   constructor(transport: RpcTransport, options?: TransactionManagerOptions) {
@@ -155,27 +201,117 @@ export class TransactionManager {
     return resp.result;
   }
 
-  /**
-   * Submit through the Jito block-engine relay.
-   * NOTE: production bundle submission requires a tip instruction inside the tx;
-   * this routes a single signed tx and is the seam where bundle+tip support lands.
-   */
-  private async submitViaJito(signedTxBase64: string): Promise<string> {
-    const url = `${this.options.jito!.blockEngineUrl.replace(/\/$/, '')}/api/v1/transactions`;
-    const res = await fetch(url, {
+  /** POST a JSON-RPC call to the configured block engine. */
+  private async jitoRpc<T>(path: string, method: string, params: unknown[]): Promise<T> {
+    const cfg = this.options.jito;
+    if (!cfg) throw new Error(`jito ${method}: options.jito.blockEngineUrl is not configured`);
+    const res = await fetch(`${cfg.blockEngineUrl.replace(/\/$/, '')}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'sendTransaction',
-        params: [signedTxBase64, { encoding: 'base64' }],
-      }),
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
     });
-    if (!res.ok) throw new Error(`jito relay HTTP ${res.status}`);
-    const body = (await res.json()) as { result?: string; error?: unknown };
-    if (typeof body.result !== 'string') throw new Error('jito relay: no signature');
+    if (!res.ok) throw new Error(`jito ${method}: HTTP ${res.status}`);
+    const body = (await res.json()) as { result?: T; error?: { message?: string } };
+    if (body.error) throw new Error(`jito ${method}: ${body.error.message ?? JSON.stringify(body.error)}`);
+    if (body.result === undefined) throw new Error(`jito ${method}: empty result`);
     return body.result;
+  }
+
+  /**
+   * Submit through the Jito block-engine relay (`/api/v1/transactions`).
+   * The relay always runs with skip_preflight on its side; revert detection
+   * still happens in confirm() via signature status.
+   */
+  private async submitViaJito(signedTxBase64: string): Promise<string> {
+    return this.jitoRpc<string>('/api/v1/transactions', 'sendTransaction', [
+      signedTxBase64,
+      { encoding: 'base64' },
+    ]);
+  }
+
+  /**
+   * Tip accounts straight from the block engine (`getTipAccounts`) — fetched
+   * once and cached. Dynamic fetch instead of a hardcoded list: tip accounts
+   * are operational data owned by Jito, and a stale hardcode misroutes tips.
+   */
+  async getTipAccounts(): Promise<readonly string[]> {
+    if (!this.tipAccounts) {
+      const accounts = await this.jitoRpc<string[]>('/api/v1/getTipAccounts', 'getTipAccounts', []);
+      if (accounts.length === 0) throw new Error('jito getTipAccounts: empty list');
+      this.tipAccounts = accounts;
+    }
+    return this.tipAccounts;
+  }
+
+  /** Random tip account per docs guidance — spreads write-lock contention. */
+  async pickTipAccount(): Promise<string> {
+    const accounts = await this.getTipAccounts();
+    return accounts[Math.floor(Math.random() * accounts.length)]!;
+  }
+
+  /**
+   * Submit an atomic bundle (1..5 signed txs, executed in order, all-or-nothing).
+   * The tip transfer (≥ MIN_JITO_TIP_LAMPORTS to pickTipAccount()) belongs INSIDE
+   * one of the transactions — same-tx placement means a failed bundle pays no tip.
+   * Returns the engine's bundle id.
+   */
+  async submitBundle(signedTxsBase64: ReadonlyArray<string>): Promise<string> {
+    if (signedTxsBase64.length < 1 || signedTxsBase64.length > MAX_BUNDLE_TXS) {
+      throw new RangeError(`bundle must contain 1..${MAX_BUNDLE_TXS} transactions, got ${signedTxsBase64.length}`);
+    }
+    const bundleId = await this.jitoRpc<string>('/api/v1/bundles', 'sendBundle', [
+      signedTxsBase64,
+      { encoding: 'base64' },
+    ]);
+    this.emit({ type: 'bundle_submitted', txCount: signedTxsBase64.length });
+    return bundleId;
+  }
+
+  /** Poll getBundleStatuses until the target commitment, an error, or timeout. */
+  async confirmBundle(
+    bundleId: string,
+    opts?: { commitment?: Commitment; timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<BundleStatus | { timedOut: true }> {
+    const target = opts?.commitment ?? this.defaultCommitment;
+    const startedAt = Date.now();
+    const deadline = startedAt + (opts?.timeoutMs ?? 30_000);
+    const pollMs = opts?.pollIntervalMs ?? 1_000;
+
+    while (Date.now() < deadline) {
+      const value = await this.jitoRpc<{ value?: Array<RawBundleStatus | null> }>(
+        '/api/v1/getBundleStatuses',
+        'getBundleStatuses',
+        [[bundleId]],
+      );
+      const st = value.value?.[0];
+      if (st) {
+        if (!bundleErrIsOk(st.err)) {
+          this.emit({ type: 'bundle_outcome', outcome: 'failed', elapsedMs: Date.now() - startedAt });
+          throw new BundleFailedError(bundleId, st.err);
+        }
+        const status = st.confirmation_status;
+        if (status && COMMITMENT_RANK[status] >= COMMITMENT_RANK[target]) {
+          this.emit({ type: 'bundle_outcome', outcome: 'landed', elapsedMs: Date.now() - startedAt });
+          return { bundleId, slot: st.slot, confirmationStatus: status };
+        }
+      }
+      await sleep(pollMs);
+    }
+    this.emit({ type: 'bundle_outcome', outcome: 'timed_out', elapsedMs: Date.now() - startedAt });
+    return { timedOut: true };
+  }
+
+  /** submitBundle + confirmBundle; throws on failure or timeout. */
+  async sendBundleAndConfirm(
+    signedTxsBase64: ReadonlyArray<string>,
+    opts?: { commitment?: Commitment; timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<BundleStatus> {
+    const bundleId = await this.submitBundle(signedTxsBase64);
+    const result = await this.confirmBundle(bundleId, opts);
+    if ('timedOut' in result) {
+      throw new Error(`bundle ${bundleId} not landed within ${opts?.timeoutMs ?? 30_000}ms`);
+    }
+    return result;
   }
 
   /** Poll signature status until target commitment, blockhash expiry, or timeout. */

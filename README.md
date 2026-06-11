@@ -68,6 +68,12 @@ strict score ordering for paid-primary/free-backup setups (combine with per-endp
 ## Transaction reliability (the core of Correctness)
 
 - **Jito relay routing** with RPC fallback — submit via Jito block-engine when configured; fall back to the resilient RPC pool on relay failure. (Never `skipPreflight` blindly; never a fixed fee.)
+- **Jito atomic bundles + tips** — `submitBundle` / `confirmBundle` / `sendBundleAndConfirm`
+  over `/api/v1/bundles` (1–5 txs, all-or-nothing, private until landed = no public-mempool
+  frontrunning surface). Tip accounts are fetched live from the engine's `getTipAccounts`
+  and picked at random to spread write-lock contention — never a hardcoded list that goes
+  stale. The tip transfer (≥ `MIN_JITO_TIP_LAMPORTS`) goes **inside** one of your
+  transactions, so a failed bundle pays no tip. See `examples/jito-bundle.ts`.
 - **Dynamic priority fee** — estimate from recent prioritization fees, clamped to a floor/ceiling.
 - **Retry with blockhash refresh** — re-fetch a fresh blockhash on expiry rather than resubmitting a dead transaction.
 - **Confirmation tracking** — poll signature status to a target commitment with bounded timeout; surface the real revert reason on failure, never an empty catch.

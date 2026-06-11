@@ -24,6 +24,10 @@ export {
 export {
   TransactionManager,
   TransactionFailedError,
+  BundleFailedError,
+  MIN_JITO_TIP_LAMPORTS,
+  MAX_BUNDLE_TXS,
+  type BundleStatus,
   type Commitment,
   type LatestBlockhash,
   type JitoConfig,
