@@ -45,17 +45,29 @@ export function createFetchTransport(endpoint: EndpointConfig): RpcTransport {
   };
 }
 
-/** Combine the caller's signal with our timeout signal. */
-function combineSignals(signals: AbortSignal[]): AbortSignal {
+/**
+ * Combine the caller's signal with our timeout signal. Returns a cleanup that
+ * detaches the listeners — without it, every attempt leaks a listener on a
+ * long-lived caller signal (React Query/abortable fetch patterns).
+ */
+function combineSignals(signals: AbortSignal[]): { signal: AbortSignal; cleanup: () => void } {
   const ctrl = new AbortController();
+  const onAbort = (): void => ctrl.abort();
+  const attached: AbortSignal[] = [];
   for (const s of signals) {
     if (s.aborted) {
       ctrl.abort();
       break;
     }
-    s.addEventListener('abort', () => ctrl.abort(), { once: true });
+    s.addEventListener('abort', onAbort, { once: true });
+    attached.push(s);
   }
-  return ctrl.signal;
+  return {
+    signal: ctrl.signal,
+    cleanup: () => {
+      for (const s of attached) s.removeEventListener('abort', onAbort);
+    },
+  };
 }
 
 export interface ResilientTransport {
@@ -129,16 +141,24 @@ export function createResilientTransport(config: ResilientTransportConfig): Resi
       const start = Date.now();
       const timeoutCtrl = new AbortController();
       const timer = setTimeout(() => timeoutCtrl.abort(), timeoutMs);
-      const signal = request.signal
+      const combined = request.signal
         ? combineSignals([request.signal, timeoutCtrl.signal])
-        : timeoutCtrl.signal;
+        : { signal: timeoutCtrl.signal, cleanup: (): void => undefined };
       try {
-        const out = await node.transport<T>({ payload: request.payload, signal });
+        const out = await node.transport<T>({ payload: request.payload, signal: combined.signal });
         const latencyMs = Date.now() - start;
         node.health.recordSuccess(latencyMs);
         emit({ type: 'request_success', endpoint: node.cfg.url, latencyMs, attempt: i });
         return out;
       } catch (err) {
+        if (request.signal?.aborted) {
+          // Caller cancellation (unmount, route change) — NOT an endpoint fault.
+          // Penalising the pool for it lets three page navigations trip every
+          // breaker. No failure recorded, no failover: surface the abort.
+          node.health.markAbandoned();
+          emit({ type: 'request_aborted', endpoint: node.cfg.url });
+          throw err;
+        }
         const errorClass = classifyError(err);
         if (!isEndpointFault(errorClass)) {
           // Genuine JSON-RPC error: surface it, do not penalise the node or fail over.
@@ -152,6 +172,7 @@ export function createResilientTransport(config: ResilientTransportConfig): Resi
         lastErr = err;
       } finally {
         clearTimeout(timer);
+        combined.cleanup();
       }
     }
     emit({ type: 'all_endpoints_failed', attempts });

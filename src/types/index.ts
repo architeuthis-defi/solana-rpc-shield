@@ -74,6 +74,11 @@ export type TransportEvent =
       readonly endpoint: string;
       readonly latencyMs: number;
     }
+  | {
+      /** Caller's AbortSignal fired — cancellation, not an endpoint fault; no penalty recorded. */
+      readonly type: 'request_aborted';
+      readonly endpoint: string;
+    }
   | { readonly type: 'all_endpoints_failed'; readonly attempts: number };
 
 export interface ResilientTransportConfig {

@@ -86,6 +86,15 @@ export class EndpointHealth {
     return this.inFlight;
   }
 
+  /**
+   * Caller abandoned the request (their AbortSignal fired): release the
+   * in-flight slot WITHOUT recording an outcome — a cancellation says nothing
+   * about endpoint health, and counting it as failure poisons routing.
+   */
+  markAbandoned(): void {
+    this.inFlight = Math.max(0, this.inFlight - 1);
+  }
+
   recordSuccess(latencyMs: number): void {
     this.inFlight = Math.max(0, this.inFlight - 1);
     const a = this.cfg.latencyAlpha;

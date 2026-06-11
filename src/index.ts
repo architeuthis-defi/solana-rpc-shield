@@ -24,6 +24,9 @@ export {
 export {
   TransactionManager,
   TransactionFailedError,
+  RpcSubmitError,
+  TransactionExpiredError,
+  TransactionTimedOutError,
   BundleFailedError,
   MIN_JITO_TIP_LAMPORTS,
   MAX_BUNDLE_TXS,

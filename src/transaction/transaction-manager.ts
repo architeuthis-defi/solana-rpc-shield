@@ -14,7 +14,19 @@
  */
 
 import type { RpcTransport } from '../types/index.js';
+import {
+  RpcSubmitError,
+  TransactionExpiredError,
+  TransactionFailedError,
+  TransactionTimedOutError,
+} from './errors.js';
+import { runTxLifecycle, type LifecycleEvent, type SignatureStatusEntry } from './lifecycle.js';
 import { PriorityFeeEstimator, type PriorityFeeConfig } from './priority-fee.js';
+
+// Error classes live in errors.ts (shared with the lifecycle engine); re-exported
+// here so existing `import { TransactionFailedError } from './transaction-manager.js'`
+// call sites keep working.
+export { RpcSubmitError, TransactionExpiredError, TransactionFailedError, TransactionTimedOutError };
 
 export type Commitment = 'processed' | 'confirmed' | 'finalized';
 
@@ -30,6 +42,8 @@ export interface JitoConfig {
   readonly blockEngineUrl: string;
   /** Fall back to normal RPC submission when the Jito relay errors. Default true. */
   readonly fallbackToRpc?: boolean;
+  /** Per-call timeout for block-engine requests (ms) — a hung relay must not hang submit(). Default 10_000. */
+  readonly requestTimeoutMs?: number;
 }
 
 /** Submission lifecycle events — consumed by logging and the OpenTelemetry exporter. */
@@ -41,6 +55,8 @@ export type TransactionEvent =
       readonly outcome: 'confirmed' | 'expired' | 'timed_out' | 'reverted';
       readonly elapsedMs: number;
     }
+  | { readonly type: 'rebroadcast'; readonly signature: string; readonly count: number }
+  | { readonly type: 'death_sweep'; readonly checked: number; readonly landed: string | null }
   | { readonly type: 'bundle_submitted'; readonly txCount: number }
   | {
       readonly type: 'bundle_outcome';
@@ -58,15 +74,23 @@ export interface TransactionManagerOptions {
 }
 
 export interface SendAndConfirmOptions {
-  /** Build + sign the base64 transaction for a given blockhash. Re-called on refresh. */
+  /** Build + sign the base64 transaction for a given blockhash. Called once per epoch — re-called ONLY after verified expiry. */
   readonly buildSignedTx: (blockhash: LatestBlockhash) => Promise<string>;
   readonly commitment?: Commitment;
-  /** Max submit attempts; each attempt refreshes the blockhash. Default 3. */
+  /** Max blockhash epochs (distinct signatures); re-sign happens ONLY after verified death. Default 3. */
   readonly maxAttempts?: number;
-  /** Confirmation timeout per attempt (ms). Default 30_000. */
+  /** Per-epoch budget (ms) incl. rebroadcasts; should exceed the blockhash lifetime (~60-90s). Default 60_000. */
   readonly confirmTimeoutMs?: number;
   /** Status poll interval (ms). Default 2_000. */
   readonly pollIntervalMs?: number;
+  /** Re-broadcast cadence for the SAME signed bytes (ms) — leader rotates every ~1.6s. Default 2_000. */
+  readonly rebroadcastIntervalMs?: number;
+  /** Allow a fresh signature after VERIFIED expiry. Default true. */
+  readonly resignOnExpiry?: boolean;
+  /** Extra submit attempts when preflight reports BlockhashNotFound. Default 2. */
+  readonly submitRetries?: number;
+  /** Gap between the two death-verification sweeps (ms). Default 2_000. */
+  readonly deathGraceMs?: number;
   /** Opt-in skipPreflight (default false — preflight catches bad txs before they cost a slot). */
   readonly skipPreflight?: boolean;
 }
@@ -75,16 +99,6 @@ export interface ConfirmResult {
   readonly signature: string;
   readonly slot: number | undefined;
   readonly confirmationStatus: Commitment;
-}
-
-/** A genuine on-chain failure (revert) — carries the program error, not a node fault. */
-export class TransactionFailedError extends Error {
-  readonly signature: string;
-  constructor(signature: string, cause: unknown) {
-    super(`transaction ${signature} failed on-chain: ${JSON.stringify(cause)}`, { cause });
-    this.name = 'TransactionFailedError';
-    this.signature = signature;
-  }
 }
 
 /** A bundle that landed with an error (or was rejected) — carries the engine's error object. */
@@ -186,7 +200,10 @@ export class TransactionManager {
   }
 
   private async submitViaRpc(signedTxBase64: string, skipPreflight: boolean): Promise<string> {
-    const resp = await this.transport<{ result?: string; error?: unknown }>({
+    const resp = await this.transport<{
+      result?: string;
+      error?: { code?: number; message?: string; data?: unknown };
+    }>({
       payload: {
         jsonrpc: '2.0',
         id: 'rpc-shield-send',
@@ -197,8 +214,36 @@ export class TransactionManager {
         ],
       },
     });
+    if (resp.error) {
+      // Surface the node's answer VERBATIM — code, message and simulation logs.
+      // Swallowing this turns "Blockhash not found" into an undebuggable mystery.
+      throw new RpcSubmitError({
+        ...(resp.error.code !== undefined ? { code: resp.error.code } : {}),
+        message: resp.error.message ?? JSON.stringify(resp.error),
+        data: resp.error.data,
+        raw: resp.error,
+      });
+    }
     if (typeof resp.result !== 'string') throw new Error('sendTransaction: no signature returned');
     return resp.result;
+  }
+
+  /** Statuses for a batch of signatures, ALIGNED with the input order (null = not seen). */
+  async getSignatureStatuses(
+    signatures: readonly string[],
+    opts?: { searchTransactionHistory?: boolean },
+  ): Promise<ReadonlyArray<SignatureStatusEntry | null>> {
+    const resp = await this.transport<{
+      result?: { value?: Array<SignatureStatusEntry | null> };
+    }>({
+      payload: {
+        jsonrpc: '2.0',
+        id: 'rpc-shield-statuses',
+        method: 'getSignatureStatuses',
+        params: [signatures, { searchTransactionHistory: opts?.searchTransactionHistory ?? false }],
+      },
+    });
+    return resp.result?.value ?? signatures.map(() => null);
   }
 
   /** POST a JSON-RPC call to the configured block engine. */
@@ -209,6 +254,7 @@ export class TransactionManager {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: AbortSignal.timeout(cfg.requestTimeoutMs ?? 10_000),
     });
     if (!res.ok) throw new Error(`jito ${method}: HTTP ${res.status}`);
     const body = (await res.json()) as { result?: T; error?: { message?: string } };
@@ -361,7 +407,8 @@ export class TransactionManager {
     return { timedOut: true };
   }
 
-  private async getBlockHeight(commitment: Commitment): Promise<number> {
+  /** Current block height at a commitment — used by expiry checks. */
+  async getBlockHeight(commitment: Commitment): Promise<number> {
     const resp = await this.transport<{ result?: number }>({
       payload: { jsonrpc: '2.0', id: 'rpc-shield-height', method: 'getBlockHeight', params: [{ commitment }] },
     });
@@ -369,28 +416,65 @@ export class TransactionManager {
   }
 
   /**
-   * Full lifecycle: build → submit → confirm, refreshing the blockhash and
-   * rebuilding the tx on expiry. Throws TransactionFailedError on a real revert.
+   * Full lifecycle via the shared engine: build → submit (bounded retry on
+   * BlockhashNotFound) → poll ALL submitted signatures → re-broadcast the SAME
+   * bytes on a cadence → re-sign ONLY after expiry is verified by two
+   * full-history sweeps. A timeout is terminal (`TransactionTimedOutError`) —
+   * the tx may still land, and re-signing on a guess is how double-sends
+   * happen. Throws `TransactionFailedError` on a real revert,
+   * `TransactionExpiredError` when every signature provably died.
    */
   async sendAndConfirm(opts: SendAndConfirmOptions): Promise<ConfirmResult> {
-    const commitment = opts.commitment ?? this.defaultCommitment;
-    const maxAttempts = opts.maxAttempts ?? 3;
-    let lastOutcome: 'expired' | 'timedOut' | 'none' = 'none';
+    const startedAt = Date.now();
+    const emitOutcome = (outcome: 'confirmed' | 'expired' | 'timed_out' | 'reverted'): void =>
+      this.emit({ type: 'confirm_outcome', outcome, elapsedMs: Date.now() - startedAt });
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const blockhash = await this.getLatestBlockhash(commitment);
-      const signedTx = await opts.buildSignedTx(blockhash);
-      const signature = await this.submit(signedTx, opts.skipPreflight ?? false);
-      const result = await this.confirm(signature, blockhash.lastValidBlockHeight, {
-        commitment,
-        ...(opts.confirmTimeoutMs !== undefined ? { timeoutMs: opts.confirmTimeoutMs } : {}),
-        ...(opts.pollIntervalMs !== undefined ? { pollIntervalMs: opts.pollIntervalMs } : {}),
-      });
-
-      if ('confirmationStatus' in result) return result;
-      lastOutcome = 'expired' in result ? 'expired' : 'timedOut';
-      // expired or timed out → loop refreshes blockhash and rebuilds the tx
+    try {
+      const result = await runTxLifecycle(
+        {
+          getLatestBlockhash: (c) => this.getLatestBlockhash(c),
+          submit: (wire, skipPreflight) => this.submit(wire, skipPreflight),
+          getStatuses: (sigs, searchHistory) =>
+            this.getSignatureStatuses(sigs, { searchTransactionHistory: searchHistory }),
+          getBlockHeight: (c) => this.getBlockHeight(c),
+        },
+        {
+          getSignedTx: (blockhash) => opts.buildSignedTx(blockhash),
+          commitment: opts.commitment ?? this.defaultCommitment,
+          maxEpochs: opts.maxAttempts ?? 3,
+          resignOnExpiry: opts.resignOnExpiry ?? true,
+          confirmTimeoutMs: opts.confirmTimeoutMs ?? 60_000,
+          pollIntervalMs: opts.pollIntervalMs ?? 2_000,
+          rebroadcastIntervalMs: opts.rebroadcastIntervalMs ?? 2_000,
+          skipPreflightFirstSend: opts.skipPreflight ?? false,
+          submitRetries: opts.submitRetries ?? 2,
+          submitRetryDelayMs: 250,
+          deathGraceMs: opts.deathGraceMs ?? 2_000,
+          lifetime: 'blockhash',
+          onEvent: (event) => this.translateLifecycleEvent(event),
+        },
+      );
+      emitOutcome('confirmed');
+      return result;
+    } catch (err) {
+      if (err instanceof TransactionFailedError) emitOutcome('reverted');
+      else if (err instanceof TransactionExpiredError) emitOutcome('expired');
+      else if (err instanceof TransactionTimedOutError) emitOutcome('timed_out');
+      throw err;
     }
-    throw new Error(`sendAndConfirm: not confirmed after ${maxAttempts} attempt(s) (last: ${lastOutcome})`);
+  }
+
+  /** Engine events → the manager's public event vocabulary (additive variants only). */
+  private translateLifecycleEvent(event: LifecycleEvent): void {
+    switch (event.type) {
+      case 'rebroadcast':
+        this.emit({ type: 'rebroadcast', signature: event.signature, count: event.count });
+        break;
+      case 'death_sweep':
+        this.emit({ type: 'death_sweep', checked: event.checked, landed: event.landed });
+        break;
+      default:
+        break; // submitted is emitted route-aware by submit(); terminals map to confirm_outcome
+    }
   }
 }

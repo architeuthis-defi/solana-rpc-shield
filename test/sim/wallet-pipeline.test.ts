@@ -35,7 +35,7 @@ function countingWallet(): { signer: WalletSigner; prompts: () => number } {
   };
 }
 
-const FAST = { rebroadcastIntervalMs: 5, pollIntervalMs: 1, confirmTimeoutMs: 500 };
+const FAST = { rebroadcastIntervalMs: 5, pollIntervalMs: 1, confirmTimeoutMs: 500, deathGraceMs: 1 };
 
 describe('WalletPipeline.sendAndConfirm', () => {
   it('signs once and confirms on the happy path, submitting the base64 of the wallet-signed bytes', async () => {
@@ -139,11 +139,12 @@ describe('WalletPipeline.sendAndConfirm', () => {
     expect(prompts()).toBe(1);
   });
 
-  it('re-signs with a FRESH blockhash after expiry when resignOnExpiry is set', async () => {
+  it('re-signs with a FRESH blockhash only after VERIFIED expiry when resignOnExpiry is set', async () => {
     const { signer, prompts } = countingWallet();
     let blockhashFetches = 0;
     let sends = 0;
     const seenBlockhashes: string[] = [];
+    const historySweeps: string[][] = [];
     const tm = new TransactionManager(
       mockRpc({
         getLatestBlockhash: () => {
@@ -154,10 +155,18 @@ describe('WalletPipeline.sendAndConfirm', () => {
           sends++;
           return { result: `SIG${sends}` };
         },
-        getSignatureStatuses: () =>
-          sends >= 2
-            ? { result: { value: [{ confirmationStatus: 'confirmed', err: null, slot: 11 }] } }
-            : { result: { value: [null] } },
+        // Per-signature statuses, aligned with the request — only SIG2 ever confirms.
+        getSignatureStatuses: (params) => {
+          const [sigs, opts] = params as [string[], { searchTransactionHistory?: boolean }];
+          if (opts?.searchTransactionHistory) historySweeps.push([...sigs]);
+          return {
+            result: {
+              value: sigs.map((s) =>
+                s === 'SIG2' && sends >= 2 ? { confirmationStatus: 'confirmed', err: null, slot: 11 } : null,
+              ),
+            },
+          };
+        },
         getBlockHeight: () => ({ result: sends >= 2 ? 50 : 200 }), // expired only for the first signed tx
       }),
     );
@@ -172,6 +181,8 @@ describe('WalletPipeline.sendAndConfirm', () => {
     expect(res.signature).toBe('SIG2');
     expect(prompts()).toBe(2); // exactly one extra prompt
     expect(seenBlockhashes).toEqual(['BH1', 'BH2']); // rebuilt against a fresh blockhash
+    // death was VERIFIED before the re-prompt: ≥2 full-history sweeps over SIG1
+    expect(historySweeps.filter((s) => s.length === 1 && s[0] === 'SIG1').length).toBeGreaterThanOrEqual(2);
   });
 
   it('gives up after maxResigns expirations', async () => {

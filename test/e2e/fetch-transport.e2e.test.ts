@@ -118,13 +118,26 @@ describe('composite transport under injected network failure', () => {
     await expect(t({ ...REQ, signal: ctrl.signal })).rejects.toThrow();
   });
 
-  it('aborts a hanging request when the caller signal fires mid-flight', async () => {
+  it('caller abort mid-flight surfaces the abort and does NOT poison pool health', async () => {
     const s = await server({ getSlot: () => 1 });
     s.setMode('hang');
     const ctrl = new AbortController();
-    const t = createResilientTransport({ endpoints: [s.url], requestTimeoutMs: 5_000 });
+    const events: TransportEvent[] = [];
+    const t = createResilientTransport({
+      endpoints: [s.url],
+      requestTimeoutMs: 5_000,
+      onEvent: (e) => events.push(e),
+    });
     setTimeout(() => ctrl.abort(), 30);
-    await expect(t({ ...REQ, signal: ctrl.signal })).rejects.toThrow(/all 1 endpoint attempt/);
+    // The abort itself propagates — NOT an "all endpoints failed" wrapper.
+    await expect(t({ ...REQ, signal: ctrl.signal })).rejects.toThrow(/abort/i);
+
+    // Cancellation must not count against the endpoint: no error recorded,
+    // no in-flight leak (a leak would skew load-damped routing forever).
+    const health = t.getHealth()[0]!;
+    expect(health.errorRate).toBe(0);
+    expect(health.inFlight).toBe(0);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'request_aborted' }));
   });
 
   it('respects maxAttempts: gives up before reaching later endpoints', async () => {
