@@ -1,5 +1,6 @@
 # solana-rpc-shield
 
+[![npm](https://img.shields.io/npm/v/solana-rpc-shield)](https://www.npmjs.com/package/solana-rpc-shield)
 [![CI](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml)
 [![coverage](https://img.shields.io/badge/coverage-98.2%25_lines_·_92.8%25_branches-brightgreen)](vitest.config.ts)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -17,6 +18,10 @@ degraded RPC nodes. Both guides document it; both leave the implementation to yo
 transport seam — **provider-agnostic**, where the existing alternatives are vendor-locked or DIY.
 
 ## 30-second quickstart
+
+```bash
+npm install solana-rpc-shield
+```
 
 ```ts
 import { createSolanaRpcFromTransport, createDefaultRpcTransport } from '@solana/kit'; // or '@solana/web3.js' v2

@@ -22,7 +22,7 @@
 |---|---|---|
 | Correctness | 40% | [lifecycle engine](../src/transaction/lifecycle.ts) + [property fuzz: never-double-lands](../test/sim/lifecycle.fuzz.test.ts) + [cross-node consistency tests](../test/sim/cross-node.test.ts) + [landing-rate A/B](../scripts/landing-sim.ts) — 170 tests |
 | Resilience Quality | 25% | health-scored weighted routing, circuit breakers, slot-lag demotion; real socket-destroy / refused / blackhole / latency sims; `simulate-drop` vs live mainnet |
-| Developer Experience | 20% | 30-second quickstart, 5-command CLI, OTel in 3 lines, 4 runnable examples + demo dApp, typed errors with verbatim node diagnostics |
+| Developer Experience | 20% | [published on npm](https://www.npmjs.com/package/solana-rpc-shield) (`npm install solana-rpc-shield`), 30-second quickstart, 5-command CLI, OTel in 3 lines, 4 runnable examples + demo dApp, typed errors with verbatim node diagnostics |
 | Tests & Simulation Quality | 15% | 98.2% lines / 92.8% branches measured, thresholds enforced in CI on node 20+22; unreliable-network AND inconsistent-cluster simulation classes; deterministic landing-rate table |
 
 ## Verify in 10 minutes
