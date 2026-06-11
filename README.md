@@ -38,6 +38,7 @@ const rpc = createSolanaRpc({ transport });
 |---|---|---|
 | `transport/` — `ResilientTransport` | Multi-endpoint pool, per-node health score (latency EWMA · slot-lag · error-rate), circuit-breaker, weighted routing + automatic failover | **Resilience** |
 | `transaction/` — `TransactionManager` | Confirmation-aware submit: Jito bundle/relay routing with RPC fallback, dynamic priority-fee estimation, retry with blockhash refresh, status tracking | **Correctness** |
+| `wallet/` — `WalletPipeline` + signer bridges | Resilient submission for **wallet-signed** txs: sign once, re-broadcast the same bytes while the blockhash lives, re-prompt only on opted-in expiry. Bridges for Wallet Standard (Phantom/Solflare/Backpack) and legacy `@solana/wallet-adapter` | **Correctness / DX** |
 | `observability/` | OpenTelemetry metrics — request latency p50/p95/p99, failover/circuit-break events, tx success rate, per-endpoint health gauges | **Developer Experience** |
 | `cli/` — `rpc-shield` | Diagnostics: `health` (live endpoint scoreboard), `bench` (latency/throughput compare), `simulate-drop` (inject failures, watch failover) | **Developer Experience** |
 | `test/sim/` | Deterministic mock RPC injecting network-drop / latency / slot-lag; ≥90% coverage incl. failure paths | **Tests** |
@@ -60,6 +61,41 @@ Slot-lag is the non-obvious one: a node can answer fast and still serve state se
 - **Retry with blockhash refresh** — re-fetch a fresh blockhash on expiry rather than resubmitting a dead transaction.
 - **Confirmation tracking** — poll signature status to a target commitment with bounded timeout; surface the real revert reason on failure, never an empty catch.
 
+## Wallet integration (the dApp-facing path)
+
+Wallets sign — the shield submits. Calling a wallet's `signAndSendTransaction` hands the
+send to the wallet's single internal RPC: no failover, no fee strategy, no confirmation
+tracking. The `WalletPipeline` instead asks the wallet to **sign only**, then owns the
+submit/confirm lifecycle through the resilient transport.
+
+The retry primitive is wallet-aware: a naive integration that "retries" by rebuilding the
+transaction re-prompts the user with a popup on every attempt. The pipeline signs **once**
+and re-broadcasts the *same signed bytes* while the blockhash is still valid — the status
+poll stays authoritative. A fresh prompt happens only after expiry, and only when the dApp
+opts in with `resignOnExpiry`.
+
+```ts
+import { TransactionManager, WalletPipeline, fromWalletStandard } from 'solana-rpc-shield';
+
+// any Wallet Standard wallet — Phantom, Solflare, Backpack…
+const signer = fromWalletStandard(wallet); // sign-only; throws if the wallet can't sign without sending
+
+const pipeline = new WalletPipeline(new TransactionManager(transport), signer);
+
+const result = await pipeline.sendAndConfirm({
+  buildTx: (blockhash) => buildMyTransferTx(blockhash), // unsigned serialized tx
+  resignOnExpiry: false, // extra popups are opt-in, never a surprise
+});
+```
+
+Legacy `@solana/wallet-adapter` dApps bridge with one extra line (the SDK itself stays
+free of web3.js v1 dependencies):
+
+```ts
+import { VersionedTransaction } from '@solana/web3.js'; // the dApp's existing v1 install
+const signer = fromLegacyAdapter(adapter, { deserialize: VersionedTransaction.deserialize });
+```
+
 ## CLI
 
 ```
@@ -68,15 +104,15 @@ rpc-shield bench    --endpoints <a,b,c>     # latency / throughput compare
 rpc-shield simulate-drop --endpoint <a>     # inject failure, observe failover
 ```
 
-## Status & build plan (13-day, deadline 2026-06-23)
+## Status & build plan (submission 2026-06-16)
 
-- [x] D1-2 — scaffold + `ResilientTransport` (pool + health scoring)  ← **in progress**
-- [ ] D3-4 — failover + circuit-breaker + slot-lag health monitor
-- [ ] D5-6 — `TransactionManager` (Jito routing + dynamic fee + retry/confirm)
-- [ ] D7-8 — OpenTelemetry export + `rpc-shield` CLI
-- [ ] D9-10 — simulation test harness, ≥90% coverage
-- [ ] D11-12 — docs, runnable examples, polish
-- [ ] D13 — buffer + final scope verification with sponsor
+- [x] Scaffold + `ResilientTransport` (pool + health scoring)
+- [x] Failover + circuit-breaker + slot-lag health monitor
+- [x] `TransactionManager` (Jito routing + dynamic fee + retry/confirm)
+- [x] Wallet integration — `WalletPipeline` + Wallet Standard / legacy adapter bridges
+- [ ] OpenTelemetry export + `rpc-shield` CLI
+- [ ] Simulation test harness, ≥90% coverage
+- [ ] Docs, runnable examples, polish
 
 ## Development
 

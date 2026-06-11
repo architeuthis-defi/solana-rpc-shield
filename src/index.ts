@@ -28,6 +28,25 @@ export {
   type ConfirmResult,
 } from './transaction/transaction-manager.js';
 export {
+  fromWalletStandard,
+  fromLegacyAdapter,
+  type WalletSigner,
+  type StandardWallet,
+  type StandardWalletAccount,
+  type WalletStandardOptions,
+  type SerializableTransaction,
+  type LegacySignerAdapter,
+  type LegacyAdapterOptions,
+} from './wallet/signers.js';
+export {
+  WalletPipeline,
+  WalletTransactionExpiredError,
+  toBase64,
+  type WalletPipelineEvent,
+  type WalletPipelineOptions,
+  type WalletSendOptions,
+} from './wallet/wallet-pipeline.js';
+export {
   ErrorClass,
   type CircuitState,
   type EndpointConfig,
