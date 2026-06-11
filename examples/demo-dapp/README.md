@@ -6,6 +6,10 @@ wallet-signed transfer through the full resilient pipeline.
 
 ## Run
 
+> Step 1 is not optional: the `file:../..` dependency packs the SDK's `dist/` —
+> installing here before building the root gives a confusing empty-package
+> runtime error, not an install error.
+
 ```bash
 # 1. build the SDK once at the repo root
 cd ../.. && npm install && npm run build

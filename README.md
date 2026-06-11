@@ -1,7 +1,7 @@
 # solana-rpc-shield
 
 [![CI](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml)
-[![coverage](https://img.shields.io/badge/coverage-98.2%25_lines_·_92.6%25_branches-brightgreen)](vitest.config.ts)
+[![coverage](https://img.shields.io/badge/coverage-98.2%25_lines_·_92.4%25_branches-brightgreen)](vitest.config.ts)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 
@@ -48,7 +48,7 @@ through real failover, bigint fidelity asserted.
 |---|---|---|---|---|
 | Multi-endpoint failover | health-scored + circuit breakers + [slot-lag demotion](src/transport/health.ts) | [cookbook example](https://github.com/anza-xyz/kit) you copy & maintain | managed — **Helius endpoints only** | out of scope (deliberately minimal) |
 | Rebroadcast + verified-expiry re-sign | [built-in, same-bytes](src/transaction/lifecycle.ts) | build yourself | smart transactions, vendor-managed | build yourself |
-| Never-double-lands guarantee | [property-fuzzed invariant](test/sim/lifecycle.fuzz.test.ts) | — | — | — |
+| Never-double-lands guarantee | [property-fuzzed invariant](test/sim/lifecycle.fuzz.test.ts) over RPC + Jito-relay sends ([model limits](docs/design-notes.md)) | — | not a stated / tested property | — |
 | Wallet sign-once pipeline | [yes](src/wallet/wallet-pipeline.ts) (Wallet Standard + legacy bridge) | build yourself | n/a | no |
 | Jito bundles + live tip accounts | [yes](src/transaction/transaction-manager.ts) | build yourself | via Helius Sender | no |
 | Works with **any** provider mix | yes — bring 2+ URLs | yes | no | yes |
@@ -166,6 +166,8 @@ One logical send = up to `maxAttempts` blockhash epochs:
    ([design notes](docs/design-notes.md)).
 
 The same engine drives the keypair path and the wallet path — one implementation, one fuzz target.
+Jito **bundles** confirm through their own bounded polling — a separate, narrower path by design
+([design notes](docs/design-notes.md)); the fuzzed invariant covers RPC and Jito-relay sends.
 
 ## Health scoring & traffic distribution (the core of Resilience)
 
@@ -266,8 +268,8 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
 ```bash
 git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield
 npm ci
-npm test                 # 157 tests: unit + real-server e2e + cross-node consistency + fuzz
-npm run test:cov         # 98.2% lines / 92.6% branches, thresholds enforced
+npm test                 # 158 tests: unit + real-server e2e + cross-node consistency + fuzz
+npm run test:cov         # 98.2% lines / 92.4% branches, thresholds enforced
 npm run sim:landing      # the landing-rate A/B table above, reproduced deterministically
 npx tsx examples/resilient-reads.ts   # the quickstart live: reads through a pool with a dead node
 npm run cli -- health -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com
@@ -277,6 +279,10 @@ npx tsx examples/otel-console.ts          # OTel metrics flowing from live devne
 # wallet demo (Phantom/Solflare/Backpack + devnet):
 npm run build && cd examples/demo-dapp && npm install && npm run dev
 ```
+
+Public endpoints rate-limit aggressively — that's part of the demonstration: watch the fault
+classification and the failover absorb it. Behind a locked-down proxy, everything above the
+CLI lines runs fully offline (the test suite never touches the network).
 
 ## License
 

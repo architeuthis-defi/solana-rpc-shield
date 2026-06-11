@@ -23,28 +23,30 @@ async function main(): Promise<void> {
   });
   transport.startHealthMonitor({ intervalMs: 1_000 }); // slot-lag probes in the background
 
-  // 2. Standard kit/web3.js v2 client on top — failover is invisible to it.
-  const rpc = createSolanaRpcFromTransport(transport);
+  try {
+    // 2. Standard kit/web3.js v2 client on top — failover is invisible to it.
+    const rpc = createSolanaRpcFromTransport(transport);
 
-  const slot = await rpc.getSlot({ commitment: 'confirmed' }).send();
-  const { value: blockhashInfo } = await rpc.getLatestBlockhash().send();
-  console.log(`slot:                ${slot}`);
-  console.log(`latest blockhash:    ${blockhashInfo.blockhash}`);
-  console.log(`lastValidBlockHeight: ${blockhashInfo.lastValidBlockHeight}`);
-  for (let i = 0; i < 6; i++) await rpc.getSlot().send(); // more traffic → the breaker has data
+    const slot = await rpc.getSlot({ commitment: 'confirmed' }).send();
+    const { value: blockhashInfo } = await rpc.getLatestBlockhash().send();
+    console.log(`slot:                ${slot}`);
+    console.log(`latest blockhash:    ${blockhashInfo.blockhash}`);
+    console.log(`lastValidBlockHeight: ${blockhashInfo.lastValidBlockHeight}`);
+    for (let i = 0; i < 6; i++) await rpc.getSlot().send(); // more traffic → the breaker has data
 
-  // 3. What the shield did for those reads: per-endpoint health after traffic.
-  //    The dead node ate the first faults, scored to zero and dropped out of
-  //    the weighted draw — the circuit breaker never even needed to fire. The
-  //    answers above never noticed.
-  await new Promise((r) => setTimeout(r, 1_200)); // let a slot probe land
-  console.log('\nendpoint health (the dead node took the hit, the reads did not):');
-  for (const h of transport.getHealth()) {
-    const state = h.circuit.toUpperCase().padEnd(9);
-    console.log(`  ${state} score=${h.score.toFixed(2)} errors=${(h.errorRate * 100).toFixed(0)}% ${h.url}`);
+    // 3. What the shield did for those reads: per-endpoint health after traffic.
+    //    The dead node ate the first faults, scored to zero and dropped out of
+    //    the weighted draw — the circuit breaker never even needed to fire. The
+    //    answers above never noticed.
+    await new Promise((r) => setTimeout(r, 1_200)); // let a slot probe land
+    console.log('\nendpoint health (the dead node took the hit, the reads did not):');
+    for (const h of transport.getHealth()) {
+      const state = h.circuit.toUpperCase().padEnd(9);
+      console.log(`  ${state} score=${h.score.toFixed(2)} errors=${(h.errorRate * 100).toFixed(0)}% ${h.url}`);
+    }
+  } finally {
+    transport.stopHealthMonitor(); // the dApp owns the monitor lifecycle — always stop on teardown
   }
-
-  transport.stopHealthMonitor();
 }
 
 main().catch((err: unknown) => {

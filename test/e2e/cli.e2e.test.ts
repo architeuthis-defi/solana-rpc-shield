@@ -172,6 +172,28 @@ describe('rpc-shield tx', () => {
     expect(out).toContain('1 chain(s) unreachable'); // the dead group is reported, not silenced
   });
 
+  it('a connected-but-stalling node cannot hang the genesis probe (a hang is not a rejection)', async () => {
+    // 'hang' mode accepts the connection and never answers — without a bound,
+    // Promise.all over the genesis probes would wait on this node forever.
+    const stalling = await server({ getSlot: () => 1 });
+    stalling.setMode('hang');
+    const honest = await server({
+      getGenesisHash: () => 'G_HONEST',
+      getSignatureStatuses: () => ({
+        context: { slot: 10 },
+        value: [{ confirmationStatus: 'finalized', confirmations: null, slot: 9, err: null }],
+      }),
+    });
+
+    // The CLI's probe budget is 5s; the whole command must finish well within
+    // the suite's timeout instead of hanging on the stalled socket. We assert
+    // the verdict still arrives and the stalled node was grouped as unknown.
+    await run('tx', 'SIG_PAST_STALLER', '-e', `${stalling.url},${honest.url}`);
+    const out = output();
+    expect(out).toContain('pool spans 2 chains'); // stalled node = its own 'unknown' group
+    expect(out).toContain('status: finalized'); // the honest chain still answered
+  }, 15_000);
+
   it('attributes a hit on a node with no genesis answer to "unknown genesis", still a real verdict', async () => {
     // Some RPC gateways filter getGenesisHash; the chain is unknowable but the
     // signature verdict from that node is still authoritative.

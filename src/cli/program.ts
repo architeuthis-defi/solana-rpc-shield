@@ -192,10 +192,13 @@ export function buildProgram(options?: BuildProgramOptions): Command {
         try {
           const resp = await createFetchTransport({ url })<{ result?: string }>({
             payload: { jsonrpc: '2.0', id: 'rpc-shield-cli-genesis', method: 'getGenesisHash', params: [] },
+            // A connected-but-stalling node must not hang the probe: a hang is
+            // not a rejection, so the catch below can't save us — a bound can.
+            signal: AbortSignal.timeout(5_000),
           });
           return typeof resp.result === 'string' ? resp.result : 'unknown';
         } catch {
-          return 'unknown'; // unreachable right now — still queried via its own group
+          return 'unknown'; // unreachable or timed out — still queried via its own group
         }
       };
       const hashes = await Promise.all(endpoints.map(genesisOf));
@@ -208,7 +211,8 @@ export function buildProgram(options?: BuildProgramOptions): Command {
 
       type SigStatus = { confirmationStatus?: string; confirmations?: number | null; slot?: number; err: unknown };
       const lookup = async (urls: readonly string[]): Promise<SigStatus | null> => {
-        const transport = createResilientTransport({ endpoints: [...urls] });
+        // Same 5s budget as the genesis probe: diagnostics answer fast or say so.
+        const transport = createResilientTransport({ endpoints: [...urls], requestTimeoutMs: 5_000 });
         const resp = await transport<{ result?: { value?: Array<SigStatus | null> } }>({
           payload: {
             jsonrpc: '2.0',

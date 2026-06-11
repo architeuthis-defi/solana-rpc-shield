@@ -22,6 +22,11 @@
  * known limitation documented in docs/design-notes.md — solving it requires
  * deriving the signature locally before submission (a future seam), since a
  * client cannot poll a signature it never learned.
+ *
+ * heightSkew (±2) intentionally matches the default expirySafetyBlocks=2:
+ * the invariants are exercised AT the boundary where the safety margin is
+ * fully consumed. The margin is not the defense — it only delays suspicion;
+ * I4's two full-history sweeps are the independent layer that must hold.
  */
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';

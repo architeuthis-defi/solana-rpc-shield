@@ -35,13 +35,19 @@ pre-acceptance). Planned for 0.3.0.
 
 ## WebSocket subscriptions (out of scope by design)
 
-`signatureSubscribe`-based confirmation has a documented history of lying
-(solana-labs/solana#23949, #25955: subscribe-after-processed races, silent
-WS drops, missed notifications). For a *reliability* library, polling
-`getSignatureStatuses` at 1-2s against a health-scored pool is the
-docs-recommended, strictly-more-robust path — WS would add a second failure
-domain. dApps that want push UX can layer subscriptions on top; the shield's
-confirmation truth stays poll-based.
+Two different things hide under "WS support" — they deserve different verdicts:
+
+- **Confirmation truth — never WS, by argument.** `signatureSubscribe`-based
+  confirmation has a documented history of lying (solana-labs/solana#23949,
+  #25955: subscribe-after-processed races, silent WS drops, missed
+  notifications). For a *reliability* library, polling `getSignatureStatuses`
+  at 1-2s against a health-scored pool is the docs-recommended,
+  strictly-more-robust path — WS would add a second failure domain to the one
+  decision that must not be wrong.
+- **Data push UX (`accountSubscribe`, slot streams) — out of scope, layerable.**
+  A resilient-WS layer (reconnect, resubscribe, failover) is a real dApp need
+  and a legitimate future surface; it is orthogonal to landing transactions.
+  Layer it on top — the shield's confirmation truth stays poll-based either way.
 
 ## SWQoS (stated precisely)
 

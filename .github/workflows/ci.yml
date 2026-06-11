@@ -23,6 +23,8 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run test:cov
-      # Evidence artifact, not a gate: deterministic landing-rate A/B table
+      # Evidence artifact, not a gate: the table's counts are deterministic,
+      # but medians carry timer jitter and loaded CI runners can starve the
+      # in-process servers — a flaky runner must not block a green build.
       - run: npm run sim:landing
         continue-on-error: true

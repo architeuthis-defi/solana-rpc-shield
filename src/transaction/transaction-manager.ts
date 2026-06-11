@@ -79,7 +79,7 @@ export interface SendAndConfirmOptions {
   readonly commitment?: Commitment;
   /** Max blockhash epochs (distinct signatures); re-sign happens ONLY after verified death. Default 3. */
   readonly maxAttempts?: number;
-  /** Per-epoch budget (ms) incl. rebroadcasts; should exceed the blockhash lifetime (~60-90s). Default 60_000. */
+  /** Per-epoch budget (ms) incl. rebroadcasts; must exceed the blockhash lifetime (~60-90s) or expiry can never be verified inside the budget. Default 120_000. */
   readonly confirmTimeoutMs?: number;
   /** Status poll interval (ms). Default 2_000. */
   readonly pollIntervalMs?: number;
@@ -443,7 +443,7 @@ export class TransactionManager {
           commitment: opts.commitment ?? this.defaultCommitment,
           maxEpochs: opts.maxAttempts ?? 3,
           resignOnExpiry: opts.resignOnExpiry ?? true,
-          confirmTimeoutMs: opts.confirmTimeoutMs ?? 60_000,
+          confirmTimeoutMs: opts.confirmTimeoutMs ?? 120_000,
           pollIntervalMs: opts.pollIntervalMs ?? 2_000,
           rebroadcastIntervalMs: opts.rebroadcastIntervalMs ?? 2_000,
           skipPreflightFirstSend: opts.skipPreflight ?? false,

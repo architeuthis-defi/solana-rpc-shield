@@ -2,6 +2,15 @@
 
 ## 0.2.1 — 2026-06-11
 
+### Changed
+
+- **`confirmTimeoutMs` default 60s → 120s.** The per-epoch budget must
+  *exceed* the blockhash lifetime (~60-90s) or expiry can never be verified
+  inside the budget — 60s contradicted the field's own documentation and
+  turned slow-landing epochs into terminal timeouts instead of
+  verified-expiry re-signs. Worst-case wall-clock at defaults grows
+  accordingly; a timeout remains terminal.
+
 ### Fixed
 
 - **CLI `tx` is now chain-aware.** In a mixed-chain pool (mainnet + devnet —
@@ -13,6 +22,10 @@
   found → status plus chain attribution, missing → `NOT FOUND on any of N
   chains`, with fully-dead chain groups reported as unreachable instead of
   silenced. Caught by running the README examples against live nodes.
+- **The `tx` genesis probe and per-chain lookups are time-bounded (5s).**
+  The probe was the only node-facing fetch in the codebase without an abort
+  signal — a connected-but-stalling node would hang the command forever
+  (a hang is not a rejection: try/catch can't save you, a bound can).
 - CLI `--version` reported 0.1.0.
 
 ### Added
@@ -21,8 +34,8 @@
   arrive covered: SlotMonitor genesis caching/malformed-response/hung-probe
   branches, the weighted-routing float-dust clamp (reproduced with honest
   numbers, no synthetic rng), throwing-listener safety in `WalletPipeline`,
-  `confirm()` expired/timed-out verdicts, and the four cross-chain `tx`
-  scenarios — 157 tests, 98.2% lines / 92.6% branches.
+  `confirm()` expired/timed-out verdicts, and the cross-chain + stalling-node
+  `tx` scenarios — 158 tests, 98.2% lines / 92.4% branches.
 
 ## 0.2.0 — 2026-06-11
 
