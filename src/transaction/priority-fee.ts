@@ -22,6 +22,18 @@ export interface PriorityFeeConfig {
   readonly floorMicroLamports?: number;
   /** Hard ceiling in micro-lamports/CU (never overpay above). Default 1_000_000. */
   readonly ceilingMicroLamports?: number;
+  /**
+   * External fee source (e.g. a provider's percentile API — Helius
+   * getPriorityFeeEstimate, Triton, your own model). Takes the tx's locked
+   * writable accounts, returns micro-lamports/CU. The result is still clamped
+   * to floor/ceiling — an external API outage or outlier must never produce a
+   * zero or runaway bid. When set, the RPC-based estimate is skipped.
+   *
+   * Why this exists: `getRecentPrioritizationFees` reports per-slot MINIMUMS
+   * of landed fees — a floor heuristic, not a market-clearing price. Under
+   * real congestion a provider fee API tracks the clearing price better.
+   */
+  readonly source?: (lockedWritableAccounts?: ReadonlyArray<string>) => Promise<number>;
 }
 
 const DEFAULTS = {
@@ -75,6 +87,13 @@ export class PriorityFeeEstimator {
    *   estimate to contention on exactly those accounts.
    */
   async estimate(lockedWritableAccounts?: ReadonlyArray<string>): Promise<number> {
+    if (this.config?.source) {
+      const floor = this.config.floorMicroLamports ?? DEFAULTS.floorMicroLamports;
+      const ceiling = this.config.ceilingMicroLamports ?? DEFAULTS.ceilingMicroLamports;
+      const external = await this.config.source(lockedWritableAccounts);
+      const safe = Number.isFinite(external) ? Math.round(external) : floor;
+      return Math.max(floor, Math.min(ceiling, safe));
+    }
     const params = lockedWritableAccounts && lockedWritableAccounts.length > 0
       ? [lockedWritableAccounts]
       : [[]];

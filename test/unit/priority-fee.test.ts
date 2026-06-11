@@ -8,6 +8,33 @@ import type { RpcRequest } from '../../src/types/index.js';
 
 const fee = (prioritizationFee: number, slot = 1): PrioritizationFee => ({ slot, prioritizationFee });
 
+describe('external fee source', () => {
+  const noTransport = (async (_req: RpcRequest) => {
+    throw new Error('external fee source must not touch the RPC transport');
+  }) as <T>(req: RpcRequest) => Promise<T>;
+
+  it('uses the source, passes accounts through, and still clamps to floor/ceiling', async () => {
+    let seenAccounts: ReadonlyArray<string> | undefined;
+    const estimator = new PriorityFeeEstimator(noTransport, {
+      floorMicroLamports: 1_000,
+      ceilingMicroLamports: 50_000,
+      source: async (accounts) => {
+        seenAccounts = accounts;
+        return 700_000; // provider spike — must be ceiled
+      },
+    });
+    expect(await estimator.estimate(['HotAccount'])).toBe(50_000);
+    expect(seenAccounts).toEqual(['HotAccount']);
+  });
+
+  it('floors a broken external source (NaN / sub-floor) instead of bidding zero', async () => {
+    const nan = new PriorityFeeEstimator(noTransport, { source: async () => Number.NaN });
+    expect(await nan.estimate()).toBe(1_000); // default floor
+    const tiny = new PriorityFeeEstimator(noTransport, { source: async () => 3 });
+    expect(await tiny.estimate()).toBe(1_000);
+  });
+});
+
 describe('computePriorityFee', () => {
   it('falls back to the floor on empty input', () => {
     expect(computePriorityFee([], { floorMicroLamports: 1500 })).toBe(1500);

@@ -1,6 +1,6 @@
 {
   "name": "solana-rpc-shield",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Resilient RPC + transaction-reliability SDK for Solana dApps \u2014 health-scored multi-endpoint failover, Jito relay routing, dynamic fees, OpenTelemetry, and a diagnostics CLI. Built on @solana/web3.js v2 pluggable transports.",
   "type": "module",
   "license": "MIT",
@@ -18,7 +18,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
@@ -62,5 +63,13 @@
     "web3js",
     "transport",
     "opentelemetry"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/architeuthis-defi/solana-rpc-shield.git"
+  },
+  "bugs": {
+    "url": "https://github.com/architeuthis-defi/solana-rpc-shield/issues"
+  },
+  "homepage": "https://github.com/architeuthis-defi/solana-rpc-shield#readme"
 }
