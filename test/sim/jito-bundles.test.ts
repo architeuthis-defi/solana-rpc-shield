@@ -9,7 +9,7 @@ import type { RpcRequest, RpcTransport } from '../../src/types/index.js';
 
 const noTransport: RpcTransport = (async (_req: RpcRequest) => {
   throw new Error('bundle paths must not touch the RPC transport');
-}) as RpcTransport;
+});
 
 const ENGINE = 'https://block-engine.example';
 const TIP_ACCOUNTS = ['Tip111', 'Tip222', 'Tip333'];

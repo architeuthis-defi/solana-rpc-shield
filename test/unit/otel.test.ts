@@ -34,7 +34,7 @@ function harness(): { telemetry: ShieldTelemetry; collect: () => Promise<Map<str
 function points(metric: MetricData | undefined): Array<{ value: unknown; attrs: Record<string, unknown> }> {
   return (metric?.dataPoints ?? []).map((dp) => ({
     value: dp.value,
-    attrs: dp.attributes as Record<string, unknown>,
+    attrs: dp.attributes,
   }));
 }
 

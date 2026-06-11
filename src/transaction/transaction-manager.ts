@@ -123,7 +123,7 @@ interface RawBundleStatus {
 /** The engine encodes success as `{ Ok: null }` (or no err at all). */
 function bundleErrIsOk(err: unknown): boolean {
   if (err === null || err === undefined) return true;
-  return typeof err === 'object' && 'Ok' in err && (err as { Ok: unknown }).Ok === null;
+  return typeof err === 'object' && 'Ok' in err && (err).Ok === null;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));

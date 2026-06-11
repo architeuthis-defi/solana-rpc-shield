@@ -65,7 +65,7 @@ describe('renderHealthTable', () => {
   it('paints AFTER padding so colour never skews column alignment', () => {
     const plain = renderHealthTable([SNAP]);
     const colored = renderHealthTable([SNAP], { color: true });
-    // eslint-disable-next-line no-control-regex
+     
     const stripped = colored.replace(/\x1b\[[0-9;]*m/g, '');
     expect(stripped).toBe(plain);
     expect(colored).toContain('\x1b[32m'); // closed circuit + healthy score → green

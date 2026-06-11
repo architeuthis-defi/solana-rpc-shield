@@ -14,7 +14,7 @@ function mockFactory(behaviour: Record<string, 'ok' | 'network' | 'ratelimit' | 
       if (mode === 'network') throw new Error('fetch failed: ECONNREFUSED');
       if (mode === 'ratelimit') throw new Error('429 Too Many Requests');
       if (mode === 'revert') throw { code: -32003, message: 'Transaction simulation failed' };
-      return { url: endpoint.url } as Probe;
+      return { url: endpoint.url };
     }) as RpcTransport;
   };
 }

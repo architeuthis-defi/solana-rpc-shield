@@ -24,8 +24,8 @@ interface SolanaRpcLib {
 }
 
 const LIBS: ReadonlyArray<[name: string, lib: SolanaRpcLib]> = [
-  ['@solana/web3.js v2', web3 as unknown as SolanaRpcLib],
-  ['@solana/kit', kit as unknown as SolanaRpcLib],
+  ['@solana/web3.js v2', web3],
+  ['@solana/kit', kit],
 ];
 
 const HANDLERS = {
