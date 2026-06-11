@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  RpcSubmitError,
   TransactionExpiredError,
   TransactionFailedError,
   TransactionManager,
@@ -135,6 +136,181 @@ describe('TransactionManager.sendAndConfirm', () => {
     expect((err as Error).message).toMatch(/not confirmed within 25ms/);
     expect(builds).toBe(1); // the whole point: a timed-out tx may still land — no second signature
     expect(finalSweepSeen).toBe(true); // one last full-history look before giving up
+  });
+
+  it('T-H1a: a death sweep that finds the tx landed returns it — never builds a second signature', async () => {
+    let builds = 0;
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: () => ({ result: 'SIG_LATE' }),
+        getSignatureStatuses: (params) => {
+          const [, opts] = params as [string[], { searchTransactionHistory?: boolean }];
+          // invisible to the hot poll; visible the moment history is searched
+          return opts?.searchTransactionHistory
+            ? { result: { value: [{ confirmationStatus: 'confirmed', err: null, slot: 77 }] } }
+            : { result: { value: [null] } };
+        },
+        getBlockHeight: () => ({ result: 200 }), // expiry suspected immediately
+      }),
+    );
+    const res = await tm.sendAndConfirm({
+      buildSignedTx: async () => {
+        builds++;
+        return 'tx';
+      },
+      pollIntervalMs: 1,
+      deathGraceMs: 1,
+    });
+    expect(res.signature).toBe('SIG_LATE');
+    expect(res.slot).toBe(77);
+    expect(builds).toBe(1); // landed-late tx returned instead of double-signed
+  });
+
+  it('T-H1b: an OLDER epoch signature landing while epoch 2 is in flight is detected and returned', async () => {
+    let sends = 0;
+    let builds = 0;
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: () => ({ result: `SIG${++sends}` }),
+        getSignatureStatuses: (params) => {
+          const [sigs] = params as [string[], unknown];
+          // SIG1 becomes visible only after epoch 2 started (sends>=2) — the
+          // engine polls ALL tracked signatures, so it must catch this.
+          return {
+            result: {
+              value: sigs.map((s) =>
+                s === 'SIG1' && sends >= 2 ? { confirmationStatus: 'confirmed', err: null, slot: 5 } : null,
+              ),
+            },
+          };
+        },
+        getBlockHeight: () => ({ result: sends >= 2 ? 50 : 200 }),
+      }),
+    );
+    const res = await tm.sendAndConfirm({
+      buildSignedTx: async () => {
+        builds++;
+        return `tx${builds}`;
+      },
+      maxAttempts: 2,
+      pollIntervalMs: 1,
+      deathGraceMs: 1,
+    });
+    expect(res.signature).toBe('SIG1'); // the old epoch's tx — exactly one transfer happened
+    expect(builds).toBe(2);
+  });
+
+  it('T-H3a: sendTransaction error bodies surface VERBATIM as RpcSubmitError (code + logs)', async () => {
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: () => ({
+          error: {
+            code: -32002,
+            message: 'Transaction simulation failed: Blockhash not found',
+            data: { logs: ['Program log: preflight'] },
+          },
+        }),
+      }),
+    );
+    const err: unknown = await tm
+      .sendAndConfirm({
+        buildSignedTx: async () => 'tx',
+        pollIntervalMs: 1,
+        deathGraceMs: 1,
+        submitRetries: 1,
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RpcSubmitError);
+    expect((err as RpcSubmitError).code).toBe(-32002);
+    expect((err as RpcSubmitError).logs).toEqual(['Program log: preflight']);
+    expect((err as Error).message).toContain('Blockhash not found');
+  });
+
+  it('T-H3b: bounded retry on Blockhash-not-found, then success on a (likely different) node', async () => {
+    let sendCalls = 0;
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: () => {
+          sendCalls++;
+          if (sendCalls < 3) {
+            return { error: { code: -32002, message: 'Blockhash not found' } };
+          }
+          return { result: 'SIG_OK' };
+        },
+        getSignatureStatuses: () => ({
+          result: { value: [{ confirmationStatus: 'confirmed', err: null, slot: 9 }] },
+        }),
+      }),
+    );
+    const res = await tm.sendAndConfirm({
+      buildSignedTx: async () => 'tx',
+      pollIntervalMs: 1,
+      deathGraceMs: 1,
+      submitRetries: 2,
+    });
+    expect(res.signature).toBe('SIG_OK');
+    expect(sendCalls).toBe(3); // 1 + 2 retries
+  });
+
+  it('T-H3c: a THROWN decoded RPC error (kit-style transport) gets the same retry treatment', async () => {
+    let sendCalls = 0;
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: () => {
+          sendCalls++;
+          // kit's createDefaultRpcTransport THROWS decoded errors instead of
+          // resolving { error } bodies — the engine must normalize both.
+          if (sendCalls === 1) throw { code: -32002, message: 'Blockhash not found' };
+          return { result: 'SIG_KIT' };
+        },
+        getSignatureStatuses: () => ({
+          result: { value: [{ confirmationStatus: 'confirmed', err: null, slot: 3 }] },
+        }),
+      }),
+    );
+    const res = await tm.sendAndConfirm({
+      buildSignedTx: async () => 'tx',
+      pollIntervalMs: 1,
+      deathGraceMs: 1,
+    });
+    expect(res.signature).toBe('SIG_KIT');
+    expect(sendCalls).toBe(2);
+  });
+
+  it('T-RB: re-broadcasts the SAME wire with skipPreflight=true while waiting', async () => {
+    const sent: Array<{ wire: string; skipPreflight?: boolean }> = [];
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => BLOCKHASH,
+        sendTransaction: (params) => {
+          const [wire, opts] = params as [string, { skipPreflight?: boolean }];
+          sent.push({ wire, ...(opts?.skipPreflight !== undefined ? { skipPreflight: opts.skipPreflight } : {}) });
+          return { result: 'SIG_RB' };
+        },
+        getSignatureStatuses: () =>
+          sent.length >= 2
+            ? { result: { value: [{ confirmationStatus: 'confirmed', err: null, slot: 8 }] } }
+            : { result: { value: [null] } },
+        getBlockHeight: () => ({ result: 50 }), // never expires
+      }),
+    );
+    const res = await tm.sendAndConfirm({
+      buildSignedTx: async () => 'same-wire',
+      pollIntervalMs: 1,
+      rebroadcastIntervalMs: 3,
+      confirmTimeoutMs: 2_000,
+      deathGraceMs: 1,
+    });
+    expect(res.signature).toBe('SIG_RB');
+    expect(sent.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(sent.map((s) => s.wire)).size).toBe(1); // identical bytes every time
+    expect(sent[0]!.skipPreflight).toBe(false);
+    expect(sent[1]!.skipPreflight).toBe(true); // rebroadcasts never preflight
   });
 
   it('falls back to RPC submission when the Jito relay is unreachable', async () => {

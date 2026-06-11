@@ -65,6 +65,23 @@ describe('Jito tip accounts', () => {
   });
 });
 
+describe('jito request timeout', () => {
+  it('aborts a hung block engine via requestTimeoutMs instead of hanging submit()', async () => {
+    vi.stubGlobal(
+      'fetch',
+      (_url: string | URL, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          // hang forever; only the timeout signal can end this request
+          init?.signal?.addEventListener('abort', () => reject(new Error('engine request aborted')));
+        }),
+    );
+    const tm = new TransactionManager(noTransport, {
+      jito: { blockEngineUrl: ENGINE, requestTimeoutMs: 20 },
+    });
+    await expect(tm.getTipAccounts()).rejects.toThrow(/abort/i);
+  });
+});
+
 describe('submitBundle', () => {
   it('posts base64 bundles to /api/v1/bundles and returns the bundle id', async () => {
     const { calls } = stubEngine((method) => {

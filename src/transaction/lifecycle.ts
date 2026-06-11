@@ -107,6 +107,13 @@ export interface LifecycleOptions {
   /** Gap between the two death-verification sweeps. */
   readonly deathGraceMs: number;
   /**
+   * Extra blocks past lastValidBlockHeight before expiry is even SUSPECTED.
+   * Nodes skew a few blocks apart; trusting a single ahead-running node's
+   * height invites a premature death verdict while the inclusion window is
+   * still open cluster-wide. Default 2 (~0.8s of insurance).
+   */
+  readonly expirySafetyBlocks?: number;
+  /**
    * 'blockhash': height-based expiry applies. 'durableNonce': the tx never
    * expires — no expiry checks, no re-sign; budget + final sweep only.
    */
@@ -251,7 +258,7 @@ export async function runTxLifecycle(deps: LifecycleDeps, opts: LifecycleOptions
       // weighted routing). Death must be verified before anything destructive.
       if (polled.kind === 'none' && opts.lifetime === 'blockhash') {
         const height = await deps.getBlockHeight(opts.commitment);
-        if (height > blockhash.lastValidBlockHeight) {
+        if (height > blockhash.lastValidBlockHeight + (opts.expirySafetyBlocks ?? 2)) {
           emit({ type: 'expiry_suspected', signature, blockHeight: height });
           for (let sweep = 0; sweep < 2; sweep++) {
             if (sweep > 0) await clock.sleep(opts.deathGraceMs);

@@ -185,6 +185,27 @@ describe('WalletPipeline.sendAndConfirm', () => {
     expect(historySweeps.filter((s) => s.length === 1 && s[0] === 'SIG1').length).toBeGreaterThanOrEqual(2);
   });
 
+  it('W-H1: with resignOnExpiry, a death sweep that finds the FIRST tx landed resolves it — no second popup', async () => {
+    const { signer, prompts } = countingWallet();
+    const tm = new TransactionManager(
+      mockRpc({
+        getLatestBlockhash: () => ({ result: { value: { blockhash: 'BH1', lastValidBlockHeight: 100 } } }),
+        sendTransaction: () => ({ result: 'SIG1' }),
+        getSignatureStatuses: (params) => {
+          const [, opts] = params as [string[], { searchTransactionHistory?: boolean }];
+          return opts?.searchTransactionHistory
+            ? { result: { value: [{ confirmationStatus: 'confirmed', err: null, slot: 21 }] } }
+            : { result: { value: [null] } };
+        },
+        getBlockHeight: () => ({ result: 200 }), // expiry suspected at once
+      }),
+    );
+    const pipeline = new WalletPipeline(tm, signer, { ...FAST, resignOnExpiry: true });
+    const res = await pipeline.sendAndConfirm({ buildTx: () => Uint8Array.from([7]) });
+    expect(res.signature).toBe('SIG1');
+    expect(prompts()).toBe(1); // landed late — the user is NEVER re-prompted
+  });
+
   it('gives up after maxResigns expirations', async () => {
     const { signer, prompts } = countingWallet();
     const tm = new TransactionManager(

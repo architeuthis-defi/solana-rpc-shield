@@ -68,8 +68,16 @@ export async function startRpcServer(handlers: Record<string, RpcHandler>): Prom
           );
           return;
         }
+        const out = handler(parsed.params);
+        // Sentinel for handler-driven JSON-RPC error bodies (HTTP 200 + error —
+        // the exact wire shape a real node uses for preflight failures).
+        const errorBody = (out as { __jsonRpcError?: unknown } | null | undefined)?.__jsonRpcError;
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ jsonrpc: '2.0', id: parsed.id, result: handler(parsed.params) }));
+        res.end(
+          errorBody !== undefined
+            ? JSON.stringify({ jsonrpc: '2.0', id: parsed.id, error: errorBody })
+            : JSON.stringify({ jsonrpc: '2.0', id: parsed.id, result: out }),
+        );
       };
       if (latencyMs > 0) setTimeout(respond, latencyMs);
       else respond();
