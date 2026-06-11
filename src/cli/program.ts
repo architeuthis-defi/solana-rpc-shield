@@ -74,7 +74,7 @@ export interface BuildProgramOptions {
 export function buildProgram(options?: BuildProgramOptions): Command {
   const program = new Command('rpc-shield')
     .description('Diagnostics for solana-rpc-shield: endpoint health, failover, latency, tx status')
-    .version('0.1.0');
+    .version('0.2.1'); // keep in sync with package.json
   if (options?.exitOverride) program.exitOverride();
 
   program
@@ -182,35 +182,90 @@ export function buildProgram(options?: BuildProgramOptions): Command {
     .description('look up a transaction signature through the resilient pool')
     .option('-e, --endpoints <list>', 'comma-separated RPC URLs (or RPC_SHIELD_ENDPOINTS)')
     .action(async (signature: string, opts: { endpoints?: string }) => {
-      const transport = createResilientTransport({ endpoints: parseEndpoints(opts.endpoints) });
-      const resp = await transport<{
-        result?: {
-          value?: Array<{
-            confirmationStatus?: string;
-            confirmations?: number | null;
-            slot?: number;
-            err: unknown;
-          } | null>;
-        };
-      }>({
-        payload: {
-          jsonrpc: '2.0',
-          id: 'rpc-shield-cli-tx',
-          method: 'getSignatureStatuses',
-          params: [[signature], { searchTransactionHistory: true }],
-        },
+      const endpoints = parseEndpoints(opts.endpoints);
+
+      // A signature lives on exactly ONE chain. In a mixed-chain pool a single
+      // routed read can land on the wrong chain and come back as an
+      // authoritative-looking NOT FOUND — the node answered successfully, so
+      // no failover fires. Group endpoints by genesis and ask every chain.
+      const genesisOf = async (url: string): Promise<string> => {
+        try {
+          const resp = await createFetchTransport({ url })<{ result?: string }>({
+            payload: { jsonrpc: '2.0', id: 'rpc-shield-cli-genesis', method: 'getGenesisHash', params: [] },
+          });
+          return typeof resp.result === 'string' ? resp.result : 'unknown';
+        } catch {
+          return 'unknown'; // unreachable right now — still queried via its own group
+        }
+      };
+      const hashes = await Promise.all(endpoints.map(genesisOf));
+      const chains = new Map<string, string[]>();
+      endpoints.forEach((url, i) => {
+        const list = chains.get(hashes[i]!) ?? [];
+        list.push(url);
+        chains.set(hashes[i]!, list);
       });
-      const st = resp.result?.value?.[0];
-      if (!st) {
-        process.stdout.write(`${signature}\n  status: NOT FOUND (never landed, or pruned beyond history)\n`);
+
+      type SigStatus = { confirmationStatus?: string; confirmations?: number | null; slot?: number; err: unknown };
+      const lookup = async (urls: readonly string[]): Promise<SigStatus | null> => {
+        const transport = createResilientTransport({ endpoints: [...urls] });
+        const resp = await transport<{ result?: { value?: Array<SigStatus | null> } }>({
+          payload: {
+            jsonrpc: '2.0',
+            id: 'rpc-shield-cli-tx',
+            method: 'getSignatureStatuses',
+            params: [[signature], { searchTransactionHistory: true }],
+          },
+        });
+        return resp.result?.value?.[0] ?? null;
+      };
+
+      const render = (st: SigStatus, chainNote = ''): void => {
+        process.stdout.write(
+          `${signature}\n` +
+            `  status: ${st.confirmationStatus ?? 'processed?'}\n` +
+            `  slot:   ${st.slot ?? '—'}\n` +
+            `  error:  ${st.err === null || st.err === undefined ? 'none' : JSON.stringify(st.err)}\n` +
+            chainNote,
+        );
+      };
+
+      if (chains.size <= 1) {
+        // Single chain — one pooled query, transport errors surface verbatim.
+        const st = await lookup(endpoints);
+        if (!st) {
+          process.stdout.write(`${signature}\n  status: NOT FOUND (never landed, or pruned beyond history)\n`);
+          return;
+        }
+        render(st);
         return;
       }
+
       process.stdout.write(
-        `${signature}\n` +
-          `  status: ${st.confirmationStatus ?? 'processed?'}\n` +
-          `  slot:   ${st.slot ?? '—'}\n` +
-          `  error:  ${st.err === null || st.err === undefined ? 'none' : JSON.stringify(st.err)}\n`,
+        `⚠  pool spans ${chains.size} chains (genesis mismatch) — checking the signature on each one\n`,
       );
+      let unreachable = 0;
+      const results = await Promise.all(
+        [...chains.entries()].map(async ([genesis, urls]) => {
+          try {
+            return { genesis, urls, st: await lookup(urls) };
+          } catch {
+            unreachable++; // a whole chain group down must not hide answers from the others
+            return { genesis, urls, st: null };
+          }
+        }),
+      );
+      const hit = results.find((r) => r.st !== null);
+      if (!hit?.st) {
+        const suffix = unreachable > 0 ? `; ${unreachable} chain(s) unreachable` : '';
+        process.stdout.write(
+          `${signature}\n  status: NOT FOUND on any of ${chains.size} chains` +
+            ` (never landed, or pruned beyond history${suffix})\n`,
+        );
+        return;
+      }
+      const label = hit.genesis === 'unknown' ? 'unknown genesis' : `${hit.genesis.slice(0, 10)}…`;
+      render(hit.st, `  chain:  ${label} (${truncateUrl(hit.urls[0]!, 44)})\n`);
     });
 
   program

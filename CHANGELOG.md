@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.1 — 2026-06-11
+
+### Fixed
+
+- **CLI `tx` is now chain-aware.** In a mixed-chain pool (mainnet + devnet —
+  the misconfiguration class the chain-mismatch detector warns about) a
+  single routed read could land on the wrong chain and return an
+  authoritative-looking `NOT FOUND` for a transaction finalized on the other
+  one; the node answered successfully, so no failover fired. `tx` now groups
+  endpoints by genesis hash and checks the signature on **every** chain:
+  found → status plus chain attribution, missing → `NOT FOUND on any of N
+  chains`, with fully-dead chain groups reported as unreachable instead of
+  silenced. Caught by running the README examples against live nodes.
+- CLI `--version` reported 0.1.0.
+
+### Added
+
+- The W3 chain-mismatch additions and the standalone `confirm()` verdicts
+  arrive covered: SlotMonitor genesis caching/malformed-response/hung-probe
+  branches, the weighted-routing float-dust clamp (reproduced with honest
+  numbers, no synthetic rng), throwing-listener safety in `WalletPipeline`,
+  `confirm()` expired/timed-out verdicts, and the four cross-chain `tx`
+  scenarios — 157 tests, 98.2% lines / 92.6% branches.
+
 ## 0.2.0 — 2026-06-11
 
 The correctness release: the transaction lifecycle now implements the

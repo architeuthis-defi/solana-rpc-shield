@@ -1,7 +1,7 @@
 {
   "name": "solana-rpc-shield",
-  "version": "0.2.0",
-  "description": "Resilient RPC + transaction-reliability SDK for Solana dApps \u2014 health-scored multi-endpoint failover, Jito relay routing, dynamic fees, OpenTelemetry, and a diagnostics CLI. Built on @solana/web3.js v2 pluggable transports.",
+  "version": "0.2.1",
+  "description": "Resilient RPC + transaction-reliability SDK for Solana dApps — health-scored multi-endpoint failover, Jito relay routing, dynamic fees, OpenTelemetry, and a diagnostics CLI. Built on @solana/web3.js v2 pluggable transports.",
   "type": "module",
   "license": "MIT",
   "engines": {

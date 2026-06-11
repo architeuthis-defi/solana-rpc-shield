@@ -1,7 +1,7 @@
 # solana-rpc-shield
 
 [![CI](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml)
-[![coverage](https://img.shields.io/badge/coverage-98.1%25_lines_·_92.2%25_branches-brightgreen)](vitest.config.ts)
+[![coverage](https://img.shields.io/badge/coverage-98.2%25_lines_·_92.6%25_branches-brightgreen)](vitest.config.ts)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 
@@ -182,7 +182,9 @@ The same engine drives the keypair path and the wallet path — one implementati
   failover — three page navigations can't trip your circuit breakers.
 - **Chain-mismatch detection:** the monitor groups endpoints by genesis hash, compares slot lag
   only within a chain, and the CLI warns when a pool accidentally mixes mainnet with devnet —
-  a real misconfiguration that would otherwise silently poison routing scores.
+  a real misconfiguration that would otherwise silently poison routing scores. `rpc-shield tx`
+  goes further: it checks the signature on **every** chain of a mixed pool, because a
+  single-routed read landing on the wrong chain returns an authoritative-looking NOT FOUND.
 
 ## Wallet integration
 
@@ -264,8 +266,8 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
 ```bash
 git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield
 npm ci
-npm test                 # 153 tests: unit + real-server e2e + cross-node consistency + fuzz
-npm run test:cov         # 98.1% lines / 92.2% branches, thresholds enforced
+npm test                 # 157 tests: unit + real-server e2e + cross-node consistency + fuzz
+npm run test:cov         # 98.2% lines / 92.6% branches, thresholds enforced
 npm run sim:landing      # the landing-rate A/B table above, reproduced deterministically
 npm run cli -- health -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com
 npm run cli -- simulate-drop -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com \

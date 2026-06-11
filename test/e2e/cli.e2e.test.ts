@@ -120,6 +120,78 @@ describe('rpc-shield tx', () => {
     await run('tx', 'SIG_REVERTED', '-e', s.url);
     expect(output()).toContain('InstructionError');
   });
+
+  it('finds the signature in a MIXED-CHAIN pool by checking every chain, not the routing draw', async () => {
+    // A signature exists on exactly one chain. With single-routed reads this
+    // lookup would be a coin flip: land on the wrong chain → a convincing
+    // "NOT FOUND" for a transaction that is finalized on the other one.
+    const wrongChain = await server({
+      getGenesisHash: () => 'GENESIS_DEVNET',
+      getSignatureStatuses: () => ({ context: { slot: 1 }, value: [null] }), // honest: not on this chain
+    });
+    const rightChain = await server({
+      getGenesisHash: () => 'GENESIS_MAINNET',
+      getSignatureStatuses: () => ({
+        context: { slot: 900 },
+        value: [{ confirmationStatus: 'finalized', confirmations: null, slot: 901, err: null }],
+      }),
+    });
+    await run('tx', 'SIG_CROSS_CHAIN', '-e', `${wrongChain.url},${rightChain.url}`);
+
+    const out = output();
+    expect(out).toContain('pool spans 2 chains');
+    expect(out).toContain('status: finalized'); // found despite the mixed pool
+    expect(out).toContain('chain:  GENESIS_MA'); // and attributed to the right chain
+  });
+
+  it('reports NOT FOUND across ALL chains of a mixed pool, never a single-chain verdict', async () => {
+    const a = await server({
+      getGenesisHash: () => 'G_CHAIN_A',
+      getSignatureStatuses: () => ({ context: { slot: 1 }, value: [null] }),
+    });
+    const b = await server({
+      getGenesisHash: () => 'G_CHAIN_B',
+      getSignatureStatuses: () => ({ context: { slot: 1 }, value: [null] }),
+    });
+    await run('tx', 'SIG_NOWHERE', '-e', `${a.url},${b.url}`);
+    expect(output()).toContain('NOT FOUND on any of 2 chains');
+  });
+
+  it('counts a fully-dead chain group as unreachable instead of hiding it in the verdict', async () => {
+    const alive = await server({
+      getGenesisHash: () => 'G_ALIVE',
+      getSignatureStatuses: () => ({ context: { slot: 1 }, value: [null] }),
+    });
+    const dead = await server({ getSlot: () => 1 });
+    dead.setMode('destroy'); // genesis probe fails → its own 'unknown' group; lookup throws too
+    await run('tx', 'SIG_DEAD_GROUP', '-e', `${alive.url},${dead.url}`);
+
+    const out = output();
+    expect(out).toContain('pool spans 2 chains');
+    expect(out).toContain('NOT FOUND on any of 2 chains');
+    expect(out).toContain('1 chain(s) unreachable'); // the dead group is reported, not silenced
+  });
+
+  it('attributes a hit on a node with no genesis answer to "unknown genesis", still a real verdict', async () => {
+    // Some RPC gateways filter getGenesisHash; the chain is unknowable but the
+    // signature verdict from that node is still authoritative.
+    const noGenesis = await server({
+      // no getGenesisHash handler → JSON-RPC -32601 → 'unknown' group
+      getSignatureStatuses: () => ({
+        context: { slot: 50 },
+        value: [{ confirmationStatus: 'confirmed', confirmations: 1, slot: 49, err: null }],
+      }),
+    });
+    const other = await server({
+      getGenesisHash: () => 'G_OTHER',
+      getSignatureStatuses: () => ({ context: { slot: 1 }, value: [null] }),
+    });
+    await run('tx', 'SIG_VIA_GATEWAY', '-e', `${noGenesis.url},${other.url}`);
+
+    const out = output();
+    expect(out).toContain('status: confirmed');
+    expect(out).toContain('chain:  unknown genesis');
+  });
 });
 
 describe('rpc-shield simulate-drop', () => {
