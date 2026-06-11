@@ -1,5 +1,7 @@
 # solana-rpc-shield
 
+[![CI](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml)
+
 **Resilient RPC + transaction-reliability SDK for Solana dApps.** A drop-in layer over `@solana/web3.js` v2 that keeps dApps online when individual RPC nodes degrade, lag, or drop — and lands transactions reliably under congestion.
 
 > Built for the Superteam Ukraine bounty *"Build SDK that improves RPC and transaction reliability for Solana dApps."* Targets the four judging axes directly: **Correctness · Resilience · Developer Experience · Tests.**
