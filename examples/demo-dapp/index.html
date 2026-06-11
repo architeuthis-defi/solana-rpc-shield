@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>solana-rpc-shield — wallet demo (devnet)</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; padding: 2rem; background: #0d1117; color: #e6edf3;
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        max-width: 980px; margin-inline: auto;
+      }
+      h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+      .sub { color: #8b949e; margin: 0 0 1.5rem; }
+      .row { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+      button {
+        background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+        padding: .45rem .9rem; border-radius: 6px; cursor: pointer; font: inherit;
+      }
+      button:hover:not(:disabled) { background: #30363d; }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      .pill { padding: .2rem .6rem; border: 1px solid #30363d; border-radius: 999px; color: #8b949e; }
+      .pill.ok { color: #3fb950; border-color: #238636; }
+      table { border-collapse: collapse; width: 100%; margin: .5rem 0 1.25rem; }
+      th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #21262d; }
+      th { color: #8b949e; font-weight: 600; }
+      .closed { color: #3fb950; } .half_open { color: #d29922; } .open { color: #f85149; }
+      #log {
+        background: #010409; border: 1px solid #21262d; border-radius: 6px;
+        padding: .75rem; height: 260px; overflow-y: auto; white-space: pre-wrap; font-size: 12px;
+      }
+      .hint { color: #8b949e; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>solana-rpc-shield · wallet demo</h1>
+    <p class="sub">
+      Phantom signs <em>once</em>; the shield owns submission — failover, rebroadcast, confirmation. Devnet.
+    </p>
+
+    <div class="row">
+      <button id="connect">Connect wallet</button>
+      <button id="airdrop" disabled>Request airdrop</button>
+      <button id="send" disabled>Send 1000 lamports (self)</button>
+      <span id="status" class="pill">no wallet</span>
+      <span id="balance" class="pill">— lamports</span>
+    </div>
+
+    <h1>Endpoint health (live)</h1>
+    <table>
+      <thead>
+        <tr><th>endpoint</th><th>circuit</th><th>score</th><th>latency</th><th>err-rate</th><th>slot-lag</th></tr>
+      </thead>
+      <tbody id="health"></tbody>
+    </table>
+
+    <h1>Pipeline events</h1>
+    <div id="log"></div>
+    <p class="hint">
+      One endpoint in the pool is intentionally dead — watch <code>request_fault</code> entries while
+      every call still succeeds. The send path goes wallet-sign → shield submit → status poll;
+      rebroadcasts reuse the same signed bytes, so the wallet never re-prompts.
+    </p>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
