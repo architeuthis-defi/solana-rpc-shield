@@ -23,3 +23,6 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run test:cov
+      # Evidence artifact, not a gate: deterministic landing-rate A/B table
+      - run: npm run sim:landing
+        continue-on-error: true

@@ -16,6 +16,6 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src", "test", "examples"],
+  "include": ["src", "test", "examples", "scripts"],
   "exclude": ["node_modules", "dist", "examples/demo-dapp"]
 }
