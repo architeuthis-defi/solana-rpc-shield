@@ -13,7 +13,7 @@
  * submit/refresh lifecycle without ever touching private keys.
  */
 
-import type { RpcTransport } from '../types/index.js';
+import { rpcNumber, type RpcTransport } from '../types/index.js';
 import {
   RpcSubmitError,
   TransactionExpiredError,
@@ -159,7 +159,9 @@ export class TransactionManager {
 
   async getLatestBlockhash(commitment?: Commitment): Promise<LatestBlockhash> {
     const resp = await this.transport<{
-      result?: { value?: { blockhash: string; lastValidBlockHeight: number } };
+      // number from the fetch transport, bigint from kit/web3.js v2 native
+      // transports — normalized at this boundary (see rpcNumber).
+      result?: { value?: { blockhash: string; lastValidBlockHeight: number | bigint } };
     }>({
       payload: {
         jsonrpc: '2.0',
@@ -170,7 +172,7 @@ export class TransactionManager {
     });
     const value = resp.result?.value;
     if (!value) throw new Error('getLatestBlockhash: empty response');
-    return { blockhash: value.blockhash, lastValidBlockHeight: value.lastValidBlockHeight };
+    return { blockhash: value.blockhash, lastValidBlockHeight: rpcNumber(value.lastValidBlockHeight) };
   }
 
   private emit(event: TransactionEvent): void {
@@ -235,7 +237,7 @@ export class TransactionManager {
     opts?: { searchTransactionHistory?: boolean },
   ): Promise<ReadonlyArray<SignatureStatusEntry | null>> {
     const resp = await this.transport<{
-      result?: { value?: Array<SignatureStatusEntry | null> };
+      result?: { value?: Array<(Omit<SignatureStatusEntry, 'slot'> & { slot?: number | bigint }) | null> };
     }>({
       payload: {
         jsonrpc: '2.0',
@@ -244,7 +246,14 @@ export class TransactionManager {
         params: [signatures, { searchTransactionHistory: opts?.searchTransactionHistory ?? false }],
       },
     });
-    return resp.result?.value ?? signatures.map(() => null);
+    const value = resp.result?.value;
+    if (!value) return signatures.map(() => null);
+    return value.map((st) => {
+      if (!st) return null;
+      const { slot, ...rest } = st;
+      const n = rpcNumber(slot);
+      return n !== undefined ? { ...rest, slot: n } : rest;
+    });
   }
 
   /** POST a JSON-RPC call to the configured block engine. */
@@ -374,7 +383,9 @@ export class TransactionManager {
 
     while (Date.now() < deadline) {
       const statuses = await this.transport<{
-        result?: { value?: Array<{ confirmationStatus?: Commitment; err: unknown; slot?: number } | null> };
+        result?: {
+          value?: Array<{ confirmationStatus?: Commitment; err: unknown; slot?: number | bigint } | null>;
+        };
       }>({
         payload: {
           jsonrpc: '2.0',
@@ -392,7 +403,7 @@ export class TransactionManager {
         const status = st.confirmationStatus;
         if (status && COMMITMENT_RANK[status] >= COMMITMENT_RANK[target]) {
           this.emit({ type: 'confirm_outcome', outcome: 'confirmed', elapsedMs: Date.now() - startedAt });
-          return { signature, slot: st.slot, confirmationStatus: status };
+          return { signature, slot: rpcNumber(st.slot), confirmationStatus: status };
         }
       } else {
         // not yet seen — check whether the blockhash has expired
@@ -410,10 +421,10 @@ export class TransactionManager {
 
   /** Current block height at a commitment — used by expiry checks. */
   async getBlockHeight(commitment: Commitment): Promise<number> {
-    const resp = await this.transport<{ result?: number }>({
+    const resp = await this.transport<{ result?: number | bigint }>({
       payload: { jsonrpc: '2.0', id: 'rpc-shield-height', method: 'getBlockHeight', params: [{ commitment }] },
     });
-    return resp.result ?? 0;
+    return rpcNumber(resp.result) ?? 0;
   }
 
   /**

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/solana-rpc-shield)](https://www.npmjs.com/package/solana-rpc-shield)
 [![CI](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/architeuthis-defi/solana-rpc-shield/actions/workflows/ci.yml)
-[![coverage](https://img.shields.io/badge/coverage-98.2%25_lines_·_92.8%25_branches-brightgreen)](vitest.config.ts)
+[![coverage](https://img.shields.io/badge/coverage-98.2%25_lines_·_92.7%25_branches-brightgreen)](vitest.config.ts)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 
@@ -277,8 +277,8 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
 ```bash
 git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield
 npm ci
-npm test                 # 170 tests: unit + real-server e2e + cross-node consistency + fuzz
-npm run test:cov         # 98.2% lines / 92.8% branches, thresholds enforced
+npm test                 # 172 tests: unit + real-server e2e + cross-node consistency + fuzz
+npm run test:cov         # 98.2% lines / 92.7% branches, thresholds enforced
 npm run sim:landing      # the landing-rate A/B table above, reproduced deterministically
 npx tsx examples/resilient-reads.ts   # the quickstart live: reads through a pool with a dead node
 npm run cli -- health -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com

@@ -117,3 +117,20 @@ export interface HealthSnapshot {
   readonly score: number;
   readonly inFlight: number;
 }
+
+/**
+ * Normalize a numeric RPC field at the transport boundary.
+ *
+ * The zero-dependency fetch transport parses JSON numbers as `number`;
+ * kit/web3.js v2 native transports parse them as `bigint` (u64 wire
+ * semantics). Engine math (height comparisons, fee percentiles, slot lag)
+ * stays plain `number` — slots, block heights and per-CU fees all sit far
+ * below 2^53, so the conversion is lossless where it matters. Mixing the two
+ * primitives instead throws `Cannot mix BigInt and other types`.
+ */
+export function rpcNumber(v: number | bigint): number;
+export function rpcNumber(v: number | bigint | undefined | null): number | undefined;
+export function rpcNumber(v: number | bigint | undefined | null): number | undefined {
+  if (typeof v === 'bigint') return Number(v);
+  return typeof v === 'number' ? v : undefined;
+}

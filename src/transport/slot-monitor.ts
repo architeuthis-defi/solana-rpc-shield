@@ -10,7 +10,7 @@
  * owns when probing begins and must stop it on teardown.
  */
 
-import type { RpcTransport } from '../types/index.js';
+import { rpcNumber, type RpcTransport } from '../types/index.js';
 
 /** Minimal surface the monitor needs from each pooled endpoint. */
 export interface SlotProbeTarget {
@@ -20,7 +20,8 @@ export interface SlotProbeTarget {
 }
 
 interface GetSlotResponse {
-  readonly result?: number;
+  /** number from the fetch transport, bigint from kit/web3.js v2 transports */
+  readonly result?: number | bigint;
   readonly error?: unknown;
 }
 
@@ -144,7 +145,10 @@ export class SlotMonitor {
         },
         signal: ctrl.signal,
       });
-      return typeof resp.result === 'number' ? resp.result : null;
+      // bigint when the pool runs a kit/web3.js v2 transport factory — a
+      // `typeof === 'number'` gate here would silently fail EVERY probe and
+      // freeze slot-lag scoring at zero.
+      return rpcNumber(resp.result) ?? null;
     } catch {
       return null; // probe failure: skip this node this round, don't crash the monitor
     } finally {

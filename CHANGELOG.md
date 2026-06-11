@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.1 — 2026-06-12
+
+### Fixed
+
+- **The engine now survives kit/web3.js v2 native transports (bigint
+  boundary).** The README-recommended setup — `transportFactory:
+  createDefaultRpcTransport` — parses every JSON number as `bigint` (u64
+  wire semantics), and three things quietly assumed `number`:
+  the lifecycle's expiry math crashed mid-confirm with `Cannot mix BigInt
+  and other types` (caught by running the keypair example against live
+  devnet); the fee estimator silently discarded every bigint sample
+  (`Number.isFinite(bigint)` is `false`) and always returned the floor; the
+  slot monitor silently failed every probe and froze slot-lag scoring at
+  zero. All numeric RPC fields are now normalized at the transport boundary
+  (`rpcNumber`) — slots, heights and per-CU fees sit far below 2^53, so the
+  conversion is lossless. Regression-gated by a full
+  TransactionManager-over-native-transport e2e in the kit/web3.js matrix,
+  and verified live: a devnet transfer through the full pipeline confirms
+  in ~2s.
+
 ## 0.3.0 — 2026-06-12
 
 ### Added

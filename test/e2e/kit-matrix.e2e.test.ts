@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as kit from '@solana/kit';
 import * as web3 from '@solana/web3.js';
 import { createResilientTransport } from '../../src/transport/resilient-transport.js';
+import { TransactionManager } from '../../src/transaction/transaction-manager.js';
 import type { EndpointConfig, RpcTransport } from '../../src/types/index.js';
 import { startRpcServer, type LocalRpcServer } from '../helpers/rpc-server.js';
 
@@ -86,5 +87,64 @@ describe.each(LIBS)('%s over the resilient composite', (_name, lib) => {
     const rpc = lib.createSolanaRpcFromTransport(composite as never);
     const slot = await rpc.getSlot().send();
     expect(String(slot)).toBe('777'); // value correct; bigint fidelity needs the native factory
+  });
+
+  it('drives the FULL TransactionManager pipeline over the native transport (bigint boundary)', async () => {
+    // The native factories parse every JSON number as bigint (u64 wire
+    // semantics). The engine's height math, fee percentiles and slot probes
+    // must normalize at the boundary — `height > lastValid + 2` over a raw
+    // bigint throws "Cannot mix BigInt and other types". Caught live on
+    // devnet by running the README example; this is the regression gate.
+    let statusCalls = 0;
+    const live = await server({
+      getLatestBlockhash: () => ({
+        context: { slot: 900 },
+        value: { blockhash: 'BHKIT', lastValidBlockHeight: 1_000 },
+      }),
+      sendTransaction: () => 'SIG_KIT_E2E',
+      // first poll: unseen → forces the expiry check (getBlockHeight math);
+      // second poll: confirmed.
+      getSignatureStatuses: () => ({
+        context: { slot: 901 },
+        value: [
+          ++statusCalls < 2 ? null : { confirmationStatus: 'confirmed', confirmations: 1, slot: 901, err: null },
+        ],
+      }),
+      getBlockHeight: () => 990, // below lastValid → not expired, keep polling
+      getRecentPrioritizationFees: () => [
+        { slot: 899, prioritizationFee: 12_345 },
+        { slot: 900, prioritizationFee: 23_456 },
+      ],
+    });
+    const composite = createResilientTransport({
+      endpoints: [live.url],
+      transportFactory: (endpoint: EndpointConfig) =>
+        lib.createDefaultRpcTransport({ url: endpoint.url }) as RpcTransport,
+    });
+
+    const manager = new TransactionManager(composite);
+
+    // Fee estimator: bigint samples must be USED, not silently filtered to the floor.
+    const fee = await manager.fees.estimate();
+    expect(fee).toBe(23_456); // p75 of the two samples — proves bigints weren't discarded
+
+    // Full lifecycle: blockhash (bigint lastValid) → submit → unseen poll →
+    // height check (the exact line that crashed) → confirmed.
+    const res = await manager.sendAndConfirm({
+      buildSignedTx: async () => 'kit-wire',
+      pollIntervalMs: 5,
+      confirmTimeoutMs: 5_000,
+    });
+    expect(res.signature).toBe('SIG_KIT_E2E');
+    expect(res.confirmationStatus).toBe('confirmed');
+    expect(res.slot).toBe(901); // normalized to number at the boundary
+    expect(typeof res.slot).toBe('number');
+
+    // Slot probe: a bigint getSlot answer must feed lag scoring, not fail silently.
+    composite.startHealthMonitor({ intervalMs: 60_000 });
+    await new Promise((r) => setTimeout(r, 150)); // let the immediate tick land
+    composite.stopHealthMonitor();
+    const health = composite.getHealth();
+    expect(health[0]!.slotLag).toBe(0); // probe succeeded (single node = freshest); not frozen by a failed parse
   });
 });

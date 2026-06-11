@@ -74,7 +74,7 @@ export interface BuildProgramOptions {
 export function buildProgram(options?: BuildProgramOptions): Command {
   const program = new Command('rpc-shield')
     .description('Diagnostics for solana-rpc-shield: endpoint health, failover, latency, tx status')
-    .version('0.3.0'); // keep in sync with package.json
+    .version('0.3.1'); // keep in sync with package.json
   if (options?.exitOverride) program.exitOverride();
 
   program

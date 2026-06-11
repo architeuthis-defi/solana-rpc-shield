@@ -8,11 +8,12 @@
  * blow past a sane ceiling.
  */
 
-import type { RpcTransport } from '../types/index.js';
+import { rpcNumber, type RpcTransport } from '../types/index.js';
 
 export interface PrioritizationFee {
-  readonly slot: number;
-  readonly prioritizationFee: number; // micro-lamports per compute unit
+  readonly slot: number | bigint;
+  /** micro-lamports per compute unit; bigint when read via a kit/web3.js v2 transport */
+  readonly prioritizationFee: number | bigint;
 }
 
 export interface PriorityFeeConfig {
@@ -56,8 +57,11 @@ export function computePriorityFee(
   const ceiling = config?.ceilingMicroLamports ?? DEFAULTS.ceilingMicroLamports;
 
   const sorted = fees
-    .map((f) => f.prioritizationFee)
-    .filter((f) => Number.isFinite(f) && f > 0)
+    // kit/web3.js v2 transports deliver u64s as bigint — Number.isFinite on a
+    // bigint is false, which would silently discard EVERY sample and pin the
+    // estimate to the floor. Normalize at the boundary first.
+    .map((f) => rpcNumber(f.prioritizationFee))
+    .filter((f): f is number => f !== undefined && Number.isFinite(f) && f > 0)
     .sort((a, b) => a - b);
 
   if (sorted.length === 0) return floor;
