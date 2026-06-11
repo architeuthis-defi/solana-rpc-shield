@@ -16,10 +16,10 @@ Solana dApps that point at a single RPC endpoint inherit that endpoint's worst m
 
 ## Design: ride the v2 transport seam, don't fight it
 
-`@solana/web3.js` v2 exposes a **pluggable RPC transport** — `createSolanaRpc({ transport })`. That seam is the whole design. The SDK is a *composite transport* that wraps N endpoint transports with health scoring and failover, so it composes cleanly with the standard `createSolanaRpc` API instead of replacing it. No fork of the RPC client, no monkey-patching.
+`@solana/web3.js` v2 exposes a **pluggable RPC transport** — `createSolanaRpcFromTransport(transport)`. That seam is the whole design. The SDK is a *composite transport* that wraps N endpoint transports with health scoring and failover, so it composes cleanly with the standard RPC client instead of replacing it. No fork, no monkey-patching.
 
 ```ts
-import { createSolanaRpc } from '@solana/web3.js';
+import { createSolanaRpcFromTransport, createDefaultRpcTransport } from '@solana/web3.js'; // or '@solana/kit'
 import { createResilientTransport } from 'solana-rpc-shield';
 
 const transport = createResilientTransport({
@@ -28,11 +28,20 @@ const transport = createResilientTransport({
     'https://your-secondary.rpc',
     'https://your-tertiary.rpc',
   ],
+  // Recommended: let the library's own transport keep v2 wire semantics
+  // (bigint-safe u64 parsing); the shield owns routing, health and failover.
+  transportFactory: ({ url }) => createDefaultRpcTransport({ url }),
 });
 
-const rpc = createSolanaRpc({ transport });
+const rpc = createSolanaRpcFromTransport(transport);
 // use `rpc` exactly like a normal v2 RPC — failover is transparent
 ```
+
+**Works with both package names.** `@solana/web3.js@2` and `@solana/kit` (its renamed
+continuation) expose the same transport seam — the test suite runs an identical
+compatibility matrix against both, through real failover (`test/e2e/kit-matrix.e2e.test.ts`).
+Omitting `transportFactory` falls back to a zero-dependency `fetch` transport: values stay
+correct, but u64s arrive as JS numbers — use the native factory when you need bigint fidelity.
 
 ## Architecture (→ judging axis)
 

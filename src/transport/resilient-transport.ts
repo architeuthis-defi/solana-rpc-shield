@@ -7,7 +7,7 @@
  * JSON-RPC error (a revert is the chain's answer, not a node problem).
  *
  * Drop straight into web3.js v2 / @solana/kit:
- *   createSolanaRpc({ transport: createResilientTransport({ endpoints }) })
+ *   createSolanaRpcFromTransport(createResilientTransport({ endpoints }))
  */
 
 import type {

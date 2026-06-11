@@ -2,7 +2,8 @@
  * Public types for solana-rpc-shield.
  *
  * The transport signature mirrors `@solana/web3.js` v2's `RpcTransport` so a
- * ResilientTransport can be passed straight into `createSolanaRpc({ transport })`.
+ * ResilientTransport drops straight into `createSolanaRpcFromTransport(...)`
+ * (same seam in `@solana/kit`).
  */
 
 /** A single JSON-RPC call as the v2 RPC client hands it to a transport. */
