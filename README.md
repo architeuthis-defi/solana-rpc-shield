@@ -83,8 +83,11 @@ client from a naive one — over any window where nothing breaks, both land ever
 Resilience is measured by *injecting* the failure modes and checking the invariants hold.
 The shield injects them twice: deterministically, against real local HTTP servers
 (`npm run sim:landing` — the table below reproduces bit-for-bit), and against **live mainnet
-nodes** (`rpc-shield simulate-drop` — the [GIF below](#cli): real endpoints, a real injected
-outage, real failover and circuit recovery).
+nodes** — `rpc-shield simulate-drop`: real endpoints, a real injected outage, real failover
+and circuit recovery (this recording deliberately mixes mainnet + devnet, so the shield's
+chain-mismatch detection fires too):
+
+![simulate-drop against live Solana nodes](docs/assets/simulate-drop.gif)
 
 **Landing-rate A/B** — `npm run sim:landing`, 50 intents × 5 failure scenarios over real local
 HTTP servers sharing one truth ledger. The *naive* client is the tutorial pattern implemented
@@ -248,12 +251,7 @@ Endpoints can also come from `RPC_SHIELD_ENDPOINTS`.
 
 `simulate-drop` against **live nodes** — the victim starts failing, faults get classified, the
 circuit opens, requests keep landing through the survivor, the window closes and traffic returns
-(this recording deliberately mixes mainnet + devnet, so the shield's chain-mismatch detection
-fires too):
-
-![simulate-drop against live Solana nodes](docs/assets/simulate-drop.gif)
-
-Sample output:
+(recorded live in [Measured evidence](#measured-evidence) above). Sample output:
 
 ```
 #  3 ok via https://api.mainnet-beta.solana.com 29ms
@@ -276,8 +274,9 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
   pool is the strictly-more-robust path for a *reliability* library. Layer push UX on top if you
   want it — confirmation truth stays poll-based.
 - **SWQoS, stated precisely:** a client SDK cannot *create* stake-weighted QoS. Your endpoint
-  list IS the routing policy — point an entry at a staked-connection endpoint or sender service
-  and submissions route through SWQoS that already exists. No overclaim.
+  list IS the routing policy — point an entry at a staked **full RPC** endpoint and submissions
+  route through SWQoS that already exists. Bare send-only sender URLs (which would fail reads
+  and be demoted by health scoring) are the planned `extraSenders` seam. No overclaim.
 - **Fee estimator limits:** `getRecentPrioritizationFees` reports per-slot **minimums** — a floor
   heuristic. For latency-critical flows plug a provider percentile API via
   `priorityFee.source` (result still clamped — an API outage can't bid zero or runaway).
@@ -289,6 +288,19 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
   nonce, expiry semantics vanish by construction. The public manager ships blockhash-first;
   the nonce surface (account setup, advance discipline, its own fuzz scenarios) is a
   documented seam ([design notes](docs/design-notes.md)).
+
+## Roadmap — the seams are the plan
+
+Each deferred surface above is a designed seam, not an absence ([design notes](docs/design-notes.md)):
+
+- **Fan-out racing** — `requestMany(request, k)` + `extraSenders` for send-only services
+  (Helius Sender, Nozomi-style), safe now that signature-set tracking is shipped.
+- **Durable-nonce public surface** — the engine already models the lifetime; exposing it means
+  nonce-account helpers, advance discipline, and its own fuzz scenarios.
+- **Resilient WS data-push layer** — reconnect/resubscribe/failover for `accountSubscribe`-class
+  streams; confirmation truth stays poll-based regardless.
+- **Tracked signatures on every ambiguous submit** — widening the 0.3.0 machinery
+  (`signatureOfWire`) to silent network drops, with death-sweep interaction fuzzed.
 
 ## Verify it yourself — 10 minutes
 
