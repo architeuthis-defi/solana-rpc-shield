@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "bin": {
-    "rpc-shield": "./dist/cli/index.js"
+    "rpc-shield": "dist/cli/index.js"
   },
   "exports": {
     ".": {
