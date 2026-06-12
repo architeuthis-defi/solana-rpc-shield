@@ -41,6 +41,37 @@ distinct cases hide in there:
   release with its own fuzz scenarios. The model documents this boundary
   (network errors are modeled pre-acceptance).
 
+## Durable nonces (modeled in the engine; public surface ships blockhash-first)
+
+The lifecycle engine treats transaction lifetime as a first-class parameter —
+`lifetime: 'blockhash' | 'durableNonce'` (src/transaction/lifecycle.ts). Under a
+nonce lifetime the rules change shape, and the engine refuses to fake it as
+"blockhash with a long deadline": the transaction never expires, so there is no
+height-based expiry check, no re-sign path, and exactly one signature ever
+exists (`maxEpochs` is forced to 1) — budget and final sweep only. The
+double-send class this library exists to kill is eliminated *by construction*
+under a durable nonce.
+
+`TransactionManager` pins `lifetime: 'blockhash'` and does not expose the nonce
+path publicly yet, deliberately:
+
+- A durable nonce needs an on-chain nonce account: rent, a setup transaction,
+  an `AdvanceNonceAccount` instruction that must be instruction zero, and
+  strictly serialized use — one in-flight transaction per nonce account.
+  Racing two spends of the same nonce is its own double-send class, just
+  relocated. A consumer-wallet dApp cannot manage any of that silently on a
+  user's behalf.
+- Upstream guidance positions durable nonces for offline/custodial signing
+  flows, not the interactive dApp path this SDK targets first.
+- Exposing the option is an API commitment: nonce-account helpers, fuzz
+  scenarios of its own (nonce advanced elsewhere, account closed mid-flight),
+  and wallet-path semantics. That deserves its own release, not a flag quietly
+  bolted onto `sendAndConfirm`.
+
+So: the engine models it (and the type system keeps the two lifetimes from
+blurring); the public surface ships the lifetime that interactive dApps
+actually use. The nonce surface is a seam, in the same sense as fan-out above.
+
 ## WebSocket subscriptions (out of scope by design)
 
 Two different things hide under "WS support" — they deserve different verdicts:

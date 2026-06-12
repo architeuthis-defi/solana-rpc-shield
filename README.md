@@ -78,6 +78,14 @@ endpoints.*
 
 ## Measured evidence
 
+Why injected failures, not an organic mainnet A/B: a healthy network cannot tell a resilient
+client from a naive one — over any window where nothing breaks, both land everything.
+Resilience is measured by *injecting* the failure modes and checking the invariants hold.
+The shield injects them twice: deterministically, against real local HTTP servers
+(`npm run sim:landing` — the table below reproduces bit-for-bit), and against **live mainnet
+nodes** (`rpc-shield simulate-drop` — the [GIF below](#cli): real endpoints, a real injected
+outage, real failover and circuit recovery).
+
 **Landing-rate A/B** — `npm run sim:landing`, 50 intents × 5 failure scenarios over real local
 HTTP servers sharing one truth ledger. The *naive* client is the tutorial pattern implemented
 fairly: one endpoint, send, poll, and on timeout re-sign a fresh transaction:
@@ -105,7 +113,9 @@ mainnet — the value is that the table reproduces exactly.*
 (node status lag, height skew, blockhash propagation delay, landing delays, reverts, drops, an
 external pre-submitter racing the first send) on a virtual clock. Headline invariant: **never
 double-lands**, plus truthful-confirm, resign-only-after-verified-death, truthful-failure,
-termination.
+termination. In plain words: ~650 hostile cluster scenarios per CI run — clock skew, lying
+status endpoints, racing pre-submitters — and in none of them does the engine ever land the
+same intent twice ([model boundary](docs/design-notes.md)).
 
 **Live bench** against the three official clusters (2026-06-11, EU residential network):
 
@@ -171,7 +181,9 @@ One logical send = up to `maxAttempts` blockhash epochs:
    separated by a grace window. A transaction that landed late is *returned*, not double-signed.
 4. **A timeout is terminal** — `TransactionTimedOutError` carries all signatures so you can keep
    watching; re-signing on a wall-clock guess is how double-sends happen.
-5. `durableNonce` lifetime at the engine level skips expiry semantics entirely
+5. Lifetime is an engine parameter, not an assumption: under a `durableNonce` lifetime expiry
+   semantics vanish — no expiry checks, no re-sign path, one signature by construction. The
+   public `TransactionManager` ships blockhash-first; the nonce surface is a documented seam
    ([design notes](docs/design-notes.md)).
 
 The same engine drives the keypair path and the wallet path — one implementation, one fuzz target.
@@ -269,8 +281,14 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
 - **Fee estimator limits:** `getRecentPrioritizationFees` reports per-slot **minimums** — a floor
   heuristic. For latency-critical flows plug a provider percentile API via
   `priorityFee.source` (result still clamped — an API outage can't bid zero or runaway).
-- **Fan-out submission & local signature derivation:** designed, deliberately deferred —
-  [seams documented](docs/design-notes.md).
+- **Fan-out submission:** racing the same bytes across K endpoints is safe **only** with full
+  signature-set tracking — without it, a race is a double-send factory. The tracking is the
+  hard part, and it is shipped and fuzzed; the race itself is a documented seam, deferred
+  rather than bolted on ([design notes](docs/design-notes.md)).
+- **Durable nonces:** the engine models lifetime as `'blockhash' | 'durableNonce'` — under a
+  nonce, expiry semantics vanish by construction. The public manager ships blockhash-first;
+  the nonce surface (account setup, advance discipline, its own fuzz scenarios) is a
+  documented seam ([design notes](docs/design-notes.md)).
 
 ## Verify it yourself — 10 minutes
 
