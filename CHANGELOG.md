@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.3 — 2026-06-12
+
+### Fixed
+
+- **`rpc-shield --version` no longer drifts from the package version.** The
+  CLI hardcoded its version with a "keep in sync with package.json" comment —
+  the exact rot class already hit once in 0.2.1 (reported 0.1.0) and it
+  happened again (0.3.2 reported 0.3.1). The version is now read from
+  package.json itself (single source of truth, works in dev via tsx and in
+  the tsup bundle), and a regression test pins `buildProgram().version()`
+  to package.json — 173 tests.
+- Coverage statements across the docs now say **92.6%+ branches** (lower
+  bound) instead of a point value: branch coverage flutters between runs
+  (observed 92.64-92.81) because the real-server network sims take
+  timing-dependent paths. Lines hold steady at 98.2%.
+
 ## 0.3.2 — 2026-06-12
 
 ### Documentation (no code changes)

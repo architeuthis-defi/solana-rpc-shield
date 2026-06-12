@@ -14,6 +14,7 @@
  */
 
 import { Command } from 'commander';
+import pkg from '../../package.json' with { type: 'json' };
 import {
   createFetchTransport,
   createResilientTransport,
@@ -74,7 +75,7 @@ export interface BuildProgramOptions {
 export function buildProgram(options?: BuildProgramOptions): Command {
   const program = new Command('rpc-shield')
     .description('Diagnostics for solana-rpc-shield: endpoint health, failover, latency, tx status')
-    .version('0.3.1'); // keep in sync with package.json
+    .version(pkg.version); // single source of truth — "keep in sync" comments don't keep themselves
   if (options?.exitOverride) program.exitOverride();
 
   program

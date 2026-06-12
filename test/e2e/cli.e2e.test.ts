@@ -37,6 +37,13 @@ const run = (...args: string[]): Promise<unknown> =>
 
 const output = (): string => writes.join('');
 
+describe('rpc-shield --version', () => {
+  it('always matches package.json — the 0.1.0 and 0.3.1 drifts were both hardcode rot', async () => {
+    const { default: pkg } = await import('../../package.json', { with: { type: 'json' } });
+    expect(buildProgram().version()).toBe(pkg.version);
+  });
+});
+
 describe('rpc-shield health', () => {
   it('prints a per-endpoint scoreboard with real slot lag', async () => {
     const fresh = await server({ getSlot: () => 500, getGenesisHash: () => 'G1' });
