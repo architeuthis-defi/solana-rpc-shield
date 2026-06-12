@@ -1,6 +1,25 @@
 # Changelog
 
-## 0.3.1 — 2026-06-12
+## 0.3.2 — 2026-06-12
+
+### Documentation (no code changes)
+
+- **design-notes: new "Durable nonces" section.** The README referenced a
+  design-notes discussion of the `durableNonce` engine lifetime that did not
+  exist. The section now states it straight: the engine models both lifetimes
+  (`lifecycle.ts` — under a nonce there is no expiry, no re-sign, one
+  signature by construction), the public `TransactionManager` deliberately
+  ships blockhash-first, and why (nonce accounts cannot be managed silently
+  on a consumer wallet's behalf; racing one nonce account is the same
+  double-send class relocated).
+- README: evidence framing (why injected failures beat an organic mainnet
+  A/B), the live-mainnet `simulate-drop` recording moved up into Measured
+  evidence, a plain-words sentence after the fuzz invariants, a Roadmap
+  section naming the designed seams, SWQoS precision (staked **full RPC**
+  endpoints vs send-only sender URLs), and an honest note on the bench
+  regime (public clusters rate-limit aggressive request rates for all
+  comers).
+- docs/SUBMISSION.md synchronized with the above.
 
 ### Fixed
 

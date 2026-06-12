@@ -120,7 +120,10 @@ termination. In plain words: ~650 hostile cluster scenarios per CI run — clock
 status endpoints, racing pre-submitters — and in none of them does the engine ever land the
 same intent twice ([model boundary](docs/design-notes.md)).
 
-**Live bench** against the three official clusters (2026-06-11, EU residential network):
+**Live bench** against the three official clusters (2026-06-11, EU residential network — a
+single low-rate pass, n=12; at higher request rates the public clusters rate-limit *all*
+comers, and no client-side failover can conjure capacity out of a fully throttled pool —
+that regime is what the rate-limit landing scenario above measures):
 
 ```
 TARGET                                        REQS  ERRS  MIN     P50     P95     P99     MAX     RPS
@@ -302,7 +305,7 @@ Each deferred surface above is a designed seam, not an absence ([design notes](d
 - **Tracked signatures on every ambiguous submit** — widening the 0.3.0 machinery
   (`signatureOfWire`) to silent network drops, with death-sweep interaction fuzzed.
 
-## Verify it yourself — 10 minutes
+## Verify it yourself — 15 minutes
 
 ```bash
 git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield
