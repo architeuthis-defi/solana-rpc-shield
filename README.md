@@ -6,16 +6,17 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 
-**The transaction-landing recipe every Solana guide tells you to build yourself — shipped as a library.**
+**When an RPC node serves stale status, the send-and-retry pattern every Solana tutorial teaches lands every transaction twice while telling the user it failed: 50 double-lands out of 50 in a reproducible test. `solana-rpc-shield` lands 100% with zero duplicates. One command reproduces both (`npm run sim:landing`).**
 
-Solana's [official retry guide](https://solana.com/developers/guides/advanced/retry) and Helius's
+That funds-loss path is exactly what the canonical guides exist to prevent. Solana's
+[official retry guide](https://solana.com/developers/guides/advanced/retry) and Helius's
 ["How to Land Transactions"](https://www.helius.dev/blog/how-to-land-transactions-on-solana) agree on
 the recipe: send with `maxRetries: 0`, re-broadcast the *same signed bytes* every ~2s yourself,
 re-sign **only after verified** blockhash expiry, use dynamic priority fees, and route around
-degraded RPC nodes. Both guides document it; both leave the implementation to you —
-[`@solana/kit` ships failover transports only as cookbook examples](https://github.com/anza-xyz/kit).
+degraded RPC nodes. Both guides document it; both leave the implementation to you
+([`@solana/kit` ships failover transports only as cookbook examples](https://github.com/anza-xyz/kit)).
 `solana-rpc-shield` is that recipe as a typed, tested SDK on the standard web3.js v2 / kit
-transport seam — **provider-agnostic**, where the existing alternatives are vendor-locked or DIY.
+transport seam, **provider-agnostic** where the existing alternatives are vendor-locked or DIY.
 
 ## 30-second quickstart
 
@@ -91,26 +92,29 @@ chain-mismatch detection fires too):
 
 **Landing-rate A/B** — `npm run sim:landing`, 50 intents × 5 failure scenarios over real local
 HTTP servers sharing one truth ledger. The *naive* client is the tutorial pattern implemented
-fairly: one endpoint, send, poll, and on timeout re-sign a fresh transaction:
+fairly: one endpoint, send, poll, and on timeout re-sign a fresh transaction.
+
+**Under a status-blind node the naive pattern double-lands every one of 50 intents — 100 needless
+signatures on-chain — while reporting total failure; the shield lands 100% with zero duplicates.**
 
 | Scenario | Client | Landed | Lost | **Double-lands** | Extra signatures | Median confirm |
 |---|---|---|---|---|---|---|
+| **status-blind node** (hot polls lag 450ms) | naive | 100% | 0% | **50** | 100 | — |
+| | **shield** | **100%** | 0% | **0** | 0 | 465ms |
 | endpoint outage (25% of intents) | naive | 74% | 26% | **0** | 0 | 3ms |
 | | **shield** | **100%** | 0% | **0** | 0 | 8ms |
 | latency spike (50% of intents) | naive | 100% | 0% | **0** | 0 | 361ms |
 | | **shield** | **100%** | 0% | **0** | 0 | 7ms |
-| status-blind node (hot polls lag 450ms) | naive | 100% | 0% | **50** | 100 | — |
-| | **shield** | **100%** | 0% | **0** | 0 | 465ms |
 | rate-limit bursts (30% of intents) | naive | 70% | 30% | **0** | 0 | 2ms |
 | | **shield** | **100%** | 0% | **0** | 0 | 5ms |
 | blackhole (20% of intents) | naive | 80% | 20% | **0** | 0 | 3ms |
 | | **shield** | **100%** | 0% | **0** | 0 | 4ms |
 
-The status-blind row is the headline: the naive pattern **double/triple-landed every single
-intent** (50/50, 100 extra signatures) *while reporting total failure to the user* — who would
-retry, again. That is the funds-loss bug class the lifecycle engine exists to kill. Counts are
-deterministic (failure assignment by intent index); run it yourself. *Simulated network, not
-mainnet — the value is that the table reproduces exactly.*
+The first row is the funds-loss bug the lifecycle engine exists to kill: a status-blind node makes
+the naive client believe nothing landed, so it re-signs, and both copies land. The user is shown
+*failure* and retries again. Counts are deterministic (failure assignment by intent index), so the
+table reproduces bit-for-bit. *Deterministic local-server simulation, not mainnet — the point is
+exact reproducibility; live fault injection is the `simulate-drop` recording above.*
 
 **Property-based fuzz** — [~650 randomized cluster schedules per CI run](test/sim/lifecycle.fuzz.test.ts)
 (node status lag, height skew, blockhash propagation delay, landing delays, reverts, drops, an
@@ -118,7 +122,10 @@ external pre-submitter racing the first send) on a virtual clock. Headline invar
 double-lands**, plus truthful-confirm, resign-only-after-verified-death, truthful-failure,
 termination. In plain words: ~650 hostile cluster scenarios per CI run — clock skew, lying
 status endpoints, racing pre-submitters — and in none of them does the engine ever land the
-same intent twice ([model boundary](docs/design-notes.md)).
+same intent twice ([model boundary](docs/design-notes.md)). The fuzz guards against a vacuous
+pass: the external-pre-submitter property asserts the racing client *actually* forced an
+`already been processed` reply (`expect(ap).toBeDefined()`) — if that hostile path never fires,
+the test fails instead of going green on an empty run.
 
 **Live bench** against the three official clusters (2026-06-11, EU residential network — a
 single low-rate pass, n=12; at higher request rates the public clusters rate-limit *all*
@@ -292,26 +299,13 @@ Declared limits beat discovered ones — full reasoning in [docs/design-notes.md
   the nonce surface (account setup, advance discipline, its own fuzz scenarios) is a
   documented seam ([design notes](docs/design-notes.md)).
 
-## Roadmap — the seams are the plan
-
-Each deferred surface above is a designed seam, not an absence ([design notes](docs/design-notes.md)):
-
-- **Fan-out racing** — `requestMany(request, k)` + `extraSenders` for send-only services
-  (Helius Sender, Nozomi-style), safe now that signature-set tracking is shipped.
-- **Durable-nonce public surface** — the engine already models the lifetime; exposing it means
-  nonce-account helpers, advance discipline, and its own fuzz scenarios.
-- **Resilient WS data-push layer** — reconnect/resubscribe/failover for `accountSubscribe`-class
-  streams; confirmation truth stays poll-based regardless.
-- **Tracked signatures on every ambiguous submit** — widening the 0.3.0 machinery
-  (`signatureOfWire`) to silent network drops, with death-sweep interaction fuzzed.
-
 ## Verify it yourself — 15 minutes
 
 ```bash
 git clone https://github.com/architeuthis-defi/solana-rpc-shield && cd solana-rpc-shield
 npm ci
 npm test                 # 173 tests: unit + real-server e2e + cross-node consistency + fuzz
-npm run test:cov         # 98.2% lines / 92.6%+ branches, thresholds enforced
+npm run test:cov         # 98.2% lines / 92.6%+ branches measured; CI fails below a 90%/85% floor
 npm run sim:landing      # the landing-rate A/B table above, reproduced deterministically
 npx tsx examples/resilient-reads.ts   # the quickstart live: reads through a pool with a dead node
 npm run cli -- health -e https://api.mainnet-beta.solana.com,https://api.devnet.solana.com
