@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933)](package.json)
 
-**When an RPC node serves stale status, the send-and-retry pattern every Solana tutorial teaches lands every transaction twice while telling the user it failed: 50 double-lands out of 50 in a reproducible test. `solana-rpc-shield` lands 100% with zero duplicates. One command reproduces both (`npm run sim:landing`).**
+**A status-blind RPC node turns the send-and-retry pattern every Solana guide teaches into a double-send: 50 transactions land twice out of 50 while the user is told they all failed. `solana-rpc-shield` lands 100% with zero duplicates. One command reproduces both (`npm run sim:landing`).**
 
 That funds-loss path is exactly what the canonical guides exist to prevent. Solana's
 [official retry guide](https://solana.com/developers/guides/advanced/retry) and Helius's
